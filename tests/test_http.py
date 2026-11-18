@@ -65,6 +65,7 @@ def test_list_and_call_tools(app):
             "rootline_merge_results",
             "rootline_score_summary",
             "rootline_compare_models",
+            "rootline_condition_effect",
             "rootline_show_cases",
         }
         assert all(t.get("description") for t in tools)

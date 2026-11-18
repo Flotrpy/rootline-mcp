@@ -486,6 +486,77 @@ class Tools:
             ),
         }
 
+    def condition_effect(
+        self,
+        model: str,
+        metric: str = "top1",
+        perturbation: str = "p0",
+        source: str = "all",
+    ) -> dict[str, Any]:
+        """Combined evidence vs each single signal on the same snapshots (the paper's RQ1)."""
+        if metric not in ("top1", "top3", "layer_ok", "parsed_ok"):
+            raise ToolError("metric must be top1, top3, layer_ok or parsed_ok")
+        df = self._filter(self._runs(source), [model], None, perturbation)
+        by_cond = {
+            c: df.filter(pl.col("condition") == c).select(
+                "incident_id", pl.col(metric).fill_null(False).alias(c)
+            )
+            for c in CONDITIONS
+        }
+        combined = by_cond["combined"]
+        if not combined.height:
+            raise ToolError(f"{model} has no scored runs under the combined condition yet.")
+        singles = []
+        for c in (c for c in CONDITIONS if c != "combined"):
+            j = combined.join(by_cond[c], on="incident_id")
+            if not j.height:
+                continue
+            only_comb = int((j["combined"] & ~j[c]).sum())
+            only_single = int((~j["combined"] & j[c]).sum())
+            p = stats.mcnemar_exact(only_comb, only_single)
+            singles.append(
+                {
+                    "condition": c,
+                    "paired_snapshots": j.height,
+                    "single_rate": stats.rate(_bools(j[c])),
+                    "combined_rate": stats.rate(_bools(j["combined"])),
+                    "difference_combined_minus_single": round(
+                        (only_comb - only_single) / j.height, 4
+                    ),
+                    "only_combined_right": only_comb,
+                    "only_single_right": only_single,
+                    "mcnemar_exact_p": p,
+                }
+            )
+        if not singles:
+            raise ToolError(f"{model} has no single-signal runs paired with combined ones yet.")
+        best = max(singles, key=lambda r: (r["single_rate"] or 0, -r["paired_snapshots"]))
+        diff = best["difference_combined_minus_single"]
+        if best["mcnemar_exact_p"] >= 0.05:
+            reading = (
+                f"No reliable difference between combined evidence and {best['condition']}, "
+                "the best single signal, at this sample size."
+            )
+        elif diff > 0:
+            reading = f"Combined evidence reliably beats {best['condition']} (p < 0.05)."
+        else:
+            reading = f"{best['condition']} alone reliably beats combined evidence (p < 0.05)."
+        return {
+            "model": model,
+            "metric": metric,
+            "perturbation": perturbation,
+            "best_single": best["condition"],
+            "combined_vs_best": best,
+            "combined_vs_each": singles,
+            "reading": reading,
+            "caveat": (
+                "The best single signal is picked after looking at these results, so its "
+                "p-value is optimistic; treat it as exploratory unless the paper fixed the "
+                "comparison in advance."
+            ),
+            "note": "Mock data: made-up numbers." if self.settings.mock else None,
+        }
+
     def show_cases(
         self,
         model: str,

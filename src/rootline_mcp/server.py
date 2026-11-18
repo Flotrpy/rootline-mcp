@@ -164,6 +164,20 @@ def build_server(settings: Settings, runs_allowed: bool, tools: Tools | None = N
         both wrong, and McNemar's exact test, with example snapshots where they differ."""
         return _call(t.compare_models, model_a, model_b, condition, metric, perturbation)
 
+    @mcp.tool(name="rootline_condition_effect", annotations=READ)
+    def condition_effect(
+        model: Model,
+        metric: Annotated[str, Field(description="top1, top3, layer_ok or parsed_ok")] = "top1",
+        perturbation: Annotated[str, Field(description="p0 or p1")] = "p0",
+        source: Annotated[
+            str, Field(description="all, published or work (private working results)")
+        ] = "all",
+    ) -> dict[str, Any]:
+        """Does giving the model all evidence help? Compares the combined condition with each
+        single signal (metrics, traces, logs) on the same snapshots, names the best single
+        signal and tests combined vs it with McNemar's exact test (the paper's RQ1)."""
+        return _call(t.condition_effect, model, metric, perturbation, source)
+
     @mcp.tool(name="rootline_show_cases", annotations=READ)
     def show_cases(
         model: Model,

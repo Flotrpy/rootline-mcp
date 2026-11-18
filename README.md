@@ -16,6 +16,7 @@ models actually answered. Free to run: no paid service, no card.
 | `rootline_merge_results` | Checks the per-provider exports before merging: conflicting run ids, queue count vs export rows, missing snapshot × condition cells, unparsed answers. `write=true` saves `runs.parquet` to the private working dataset. |
 | `rootline_score_summary` | Top-1 with a 95% bootstrap interval, top-3, layer, evidence validity, parse rate, confidence and healthy false alarms, grouped by model, condition, fault, fault group (application / network / hardware / healthy), perturbation or incident. |
 | `rootline_compare_models` | Paired comparison on the same snapshots with McNemar's exact test and example snapshots where the two models differ. |
+| `rootline_condition_effect` | Combined evidence vs each single signal on the same snapshots, the best single signal, and McNemar's exact test for combined vs that one (the paper's RQ1). |
 | `rootline_show_cases` | Real answers next to the true fault: wrong, right, unparsed, overconfident or false alarms on healthy snapshots. |
 
 ## How it works
