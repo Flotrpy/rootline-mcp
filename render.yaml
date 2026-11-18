@@ -1,0 +1,21 @@
+# Render Blueprint for the free plan (512 MB, sleeps after 15 idle minutes).
+# Secrets are marked sync: false, so Render asks for them in its dashboard;
+# none is stored in this file.
+services:
+  - type: web
+    name: rootline-mcp
+    runtime: python
+    plan: free
+    buildCommand: pip install .
+    startCommand: rootline-mcp
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.13.1"
+      - key: ROOTLINE_MCP_TOKEN
+        generateValue: true
+      - key: HF_TOKEN
+        sync: false
+      - key: ROOTLINE_GITHUB_TOKEN
+        sync: false

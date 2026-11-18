@@ -1,0 +1,537 @@
+"""What each MCP tool does, kept apart from the MCP plumbing so it is easy to test."""
+
+from __future__ import annotations
+
+import os
+import tempfile
+from collections import Counter, defaultdict
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
+from zoneinfo import ZoneInfo
+
+import polars as pl
+
+from rootline_mcp import outputs, stats
+from rootline_mcp.catalog import (
+    CONDITIONS,
+    MODELS,
+    estimate_days,
+    fault_of,
+    get_model,
+    group_of,
+    jobs_per_day,
+)
+from rootline_mcp.config import Settings
+from rootline_mcp.runner import Backend, RunError, RunRequest
+from rootline_mcp.store import RUN_COLUMNS, Store
+
+SCORED = ("parsed_ok", "top1", "top3", "layer_ok", "raw_output")
+GROUP_KEYS = {
+    "model": "model_id",
+    "condition": "condition",
+    "fault": "fault",
+    "group": "fault_group",
+    "perturbation": "perturbation",
+    "incident": "incident_id",
+}
+CASE_KINDS = ("wrong", "right", "unparsed", "overconfident", "false_alarm")
+
+
+class ToolError(Exception):
+    """A problem the person can fix; shown as the tool's error message."""
+
+
+def _tz() -> ZoneInfo:
+    return ZoneInfo(os.environ.get("ROOTLINE_TZ", "America/New_York"))
+
+
+def _local_time(ts: float | str | None) -> str | None:
+    if ts is None:
+        return None
+    if isinstance(ts, str):
+        try:
+            dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        except ValueError:
+            return ts
+    else:
+        dt = datetime.fromtimestamp(ts, UTC)
+    return dt.astimezone(_tz()).strftime("%a %b %d, %I:%M %p %Z")
+
+
+def _with_facets(df: pl.DataFrame) -> pl.DataFrame:
+    return df.with_columns(
+        pl.col("incident_id").map_elements(fault_of, return_dtype=pl.String).alias("fault"),
+    ).with_columns(
+        pl.col("fault").map_elements(group_of, return_dtype=pl.String).alias("fault_group"),
+    )
+
+
+def _bools(series: pl.Series) -> list[bool]:
+    return [bool(x) for x in series.fill_null(False).to_list()]
+
+
+@dataclass
+class Tools:
+    settings: Settings
+    store: Store
+    backend: Backend
+    runs_allowed: bool = True
+
+    # --- helpers -------------------------------------------------------------
+
+    def _runs(self, source: str = "all") -> pl.DataFrame:
+        try:
+            df = self.store.runs(source)
+        except (RuntimeError, ValueError) as e:
+            raise ToolError(str(e)) from e
+        return _with_facets(df) if df.height else df
+
+    def _filter(
+        self,
+        df: pl.DataFrame,
+        models: list[str] | None = None,
+        conditions: list[str] | None = None,
+        perturbation: str | None = "p0",
+    ) -> pl.DataFrame:
+        if models:
+            unknown = sorted(set(models) - set(df["model_id"].unique().to_list()))
+            if unknown:
+                have = sorted(df["model_id"].unique().to_list())
+                raise ToolError(f"no results for {unknown}; results exist for {have}")
+            df = df.filter(pl.col("model_id").is_in(models))
+        if conditions:
+            bad = [c for c in conditions if c not in CONDITIONS]
+            if bad:
+                raise ToolError(f"unknown conditions {bad}; use {list(CONDITIONS)}")
+            df = df.filter(pl.col("condition").is_in(conditions))
+        if perturbation:
+            df = df.filter(pl.col("perturbation") == perturbation)
+        return df
+
+    def _known_incidents(self, df: pl.DataFrame | None = None) -> list[str]:
+        df = self._runs() if df is None else df
+        return sorted(df["incident_id"].unique().to_list()) if df.height else []
+
+    # --- tools ---------------------------------------------------------------
+
+    def overview(self) -> dict[str, Any]:
+        files = []
+        for f in self.store.run_files():
+            try:
+                n = self.store.read_runs(f).height
+            except Exception as e:
+                n = f"unreadable: {e}"
+            files.append({"source": f.source, "file": f.name, "rows": n})
+        df = self._runs()
+        by_model = (
+            df.group_by("model_id")
+            .agg(pl.len().alias("runs"), pl.col("condition").n_unique().alias("conditions"))
+            .sort("model_id")
+            .to_dicts()
+            if df.height
+            else []
+        )
+        return {
+            "setup": self.settings.describe(),
+            "can_start_runs": self.runs_allowed and self.backend.name != "none",
+            "result_files": files,
+            "runs_by_model": by_model,
+            "snapshots_seen": len(self._known_incidents(df)),
+            "queues": self.run_status()["queues"],
+            "note": "Mock data: made-up numbers." if self.settings.mock else None,
+        }
+
+    def list_models(self) -> dict[str, Any]:
+        df = self._runs()
+        incidents = self._known_incidents(df) or [f"x-r{i}" for i in range(42)]
+        sweep = len(incidents) * len(CONDITIONS)
+        done = Counter(df["model_id"].to_list()) if df.height else Counter()
+        out = []
+        for m in MODELS.values():
+            out.append(
+                {
+                    "model": m.id,
+                    "provider": m.provider,
+                    "tier": m.tier,
+                    "runs_on": "your computer (Ollama)"
+                    if m.runs_on == "local"
+                    else "free cloud API",
+                    "free_jobs_per_day": jobs_per_day(m),
+                    "runs_in_results": done.get(m.id, 0),
+                    "full_sweep_jobs": sweep,
+                    "days_for_remaining": estimate_days(m, max(0, sweep - done.get(m.id, 0))),
+                }
+            )
+        return {"models": out, "conditions": list(CONDITIONS)}
+
+    def start_run(
+        self,
+        model: str,
+        confirm: bool = False,
+        perturbation: str = "p0",
+        max_wait_s: int = 900,
+        conditions: list[str] | None = None,
+        incidents: list[str] | None = None,
+    ) -> dict[str, Any]:
+        try:
+            m = get_model(model)
+        except ValueError as e:
+            raise ToolError(str(e)) from e
+        req = RunRequest(
+            m, perturbation, max_wait_s, tuple(conditions or ()), tuple(incidents or ())
+        )
+        try:
+            req.validate()
+        except RunError as e:
+            raise ToolError(str(e)) from e
+        df = self._runs()
+        incs = list(incidents or self._known_incidents(df))
+        conds = list(conditions or CONDITIONS)
+        have = set()
+        if df.height:
+            mine = df.filter(
+                (pl.col("model_id") == m.id) & (pl.col("perturbation") == perturbation)
+            )
+            have = set(zip(mine["incident_id"].to_list(), mine["condition"].to_list(), strict=True))
+        todo = [(i, c) for i in incs for c in conds if (i, c) not in have]
+        plan = {
+            "model": m.id,
+            "backend": self.backend.name,
+            "jobs_already_done": len(incs) * len(conds) - len(todo),
+            "jobs_to_run": len(todo),
+            "free_jobs_per_day": jobs_per_day(m),
+            "estimated_days": estimate_days(m, len(todo)),
+            "what_happens": (
+                "GitHub Actions runs scripts/score_daily.py for this model: it resumes the queue from"
+                " the private Hugging Face working dataset, scores until the free daily cap would"
+                " make it wait longer than max_wait_s, then uploads the queue and runs export."
+                if self.backend.name == "github"
+                else "Pretend run (mock mode): nothing is scored."
+                if self.backend.name == "mock"
+                else "The harness runs enqueue, work and export on this computer."
+            ),
+            "cost": "Free-tier API quota only; no paid calls.",
+        }
+        if not confirm:
+            return {
+                "plan": plan,
+                "started": False,
+                "next": "Call again with confirm=true to start.",
+            }
+        if not self.runs_allowed:
+            raise ToolError(
+                "Starting runs is switched off on this endpoint because it has no ROOTLINE_MCP_TOKEN."
+                " Set one (and use the URL with the token) to allow it."
+            )
+        if not todo:
+            return {"plan": plan, "started": False, "next": "Nothing left to run for this model."}
+        try:
+            result = self.backend.start(req)
+        except RunError as e:
+            raise ToolError(str(e)) from e
+        return {"plan": plan, **result}
+
+    def run_status(self, model: str | None = None, limit: int = 5) -> dict[str, Any]:
+        queues = []
+        for q in self.store.queues():
+            for mid, c in sorted(q.counts.items()):
+                if model and mid != model:
+                    continue
+                total = sum(c.values())
+                left = c.get("pending", 0) + c.get("running", 0)
+                eta = estimate_days(MODELS[mid], left) if mid in MODELS else None
+                queues.append(
+                    {
+                        "queue": f"{q.source}:{q.name}",
+                        "model": mid,
+                        "done": c.get("done", 0),
+                        "pending": c.get("pending", 0),
+                        "running": c.get("running", 0),
+                        "failed": c.get("failed", 0),
+                        "total": total,
+                        "percent_done": round(100 * c.get("done", 0) / total, 1) if total else 0,
+                        "days_left_at_free_cap": eta,
+                        "last_activity": _local_time(q.last_update),
+                    }
+                )
+        try:
+            recent = self.backend.recent(limit)
+        except RunError as e:
+            recent = [{"error": str(e)}]
+        except Exception as e:
+            recent = [{"error": f"could not read runs: {type(e).__name__}"}]
+        for r in recent:
+            for k in ("created_at", "updated_at"):
+                if r.get(k):
+                    r[k] = _local_time(r[k])
+        return {"queues": queues, "recent_runs": recent, "backend": self.backend.name}
+
+    def list_failures(self, model: str | None = None, limit: int = 20) -> dict[str, Any]:
+        groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for q in self.store.queues():
+            for f in q.failures:
+                if model and f["model_id"] != model:
+                    continue
+                kind = str(f["error"]).split(":", 1)[0].strip() or "unknown"
+                groups[kind].append(f)
+        df = self._runs()
+        unparsed = 0
+        if df.height:
+            sub = df.filter(~pl.col("parsed_ok").fill_null(False))
+            if model:
+                sub = sub.filter(pl.col("model_id") == model)
+            unparsed = sub.height
+        return {
+            "failed_jobs": sum(len(v) for v in groups.values()),
+            "by_error": [
+                {
+                    "error": k,
+                    "count": len(v),
+                    "examples": [x["key"] for x in v[:3]],
+                    "first_message": str(v[0]["error"])[:240],
+                }
+                for k, v in sorted(groups.items(), key=lambda kv: -len(kv[1]))
+            ][:limit],
+            "answers_that_failed_to_parse": unparsed,
+            "hint": "Failed jobs stay in the queue; a retryable error is tried again on the next run.",
+        }
+
+    def merge_results(self, write: bool = False) -> dict[str, Any]:
+        files = [f for f in self.store.run_files() if not f.merged]
+        frames = {f: self.store.read_runs(f) for f in files}
+        checks: list[str] = []
+        per_file = []
+        for f, d in frames.items():
+            dup = d.height - d["run_id"].n_unique()
+            per_file.append(
+                {
+                    "file": f"{f.source}:{f.name}",
+                    "rows": d.height,
+                    "models": sorted(d["model_id"].unique().to_list()),
+                    "duplicate_ids": dup,
+                }
+            )
+            if dup:
+                checks.append(f"{f.name} repeats {dup} run_ids")
+        conflicts: list[str] = []
+        if len(frames) > 1:
+            allrows = pl.concat(list(frames.values()), how="vertical_relaxed")
+            dupes = allrows.filter(pl.col("run_id").is_duplicated())
+            for rid, grp in dupes.group_by("run_id"):
+                if grp.select(SCORED).unique().height > 1:
+                    conflicts.append(str(rid[0]))
+        if conflicts:
+            checks.append(f"{len(conflicts)} run_ids differ between exports")
+        # The queue must hold exactly what its export holds.
+        queue_vs_export = []
+        exports = {Path(f.name).stem.removeprefix("runs-"): d for f, d in frames.items()}
+        for q in self.store.queues():
+            prov = Path(q.name).stem.removeprefix("queue-")
+            exp = exports.get(prov)
+            rows = exp.height if exp is not None else 0
+            same = rows == q.done_records
+            queue_vs_export.append(
+                {
+                    "provider": prov,
+                    "done_in_queue": q.done_records,
+                    "rows_in_export": rows,
+                    "match": same,
+                }
+            )
+            if not same:
+                checks.append(
+                    f"{prov}: queue has {q.done_records} done jobs but the export has {rows} rows"
+                    " (run export again)"
+                )
+        merged = self._runs()
+        incidents = self._known_incidents(merged)
+        completeness = []
+        for mid in sorted(merged["model_id"].unique().to_list()) if merged.height else []:
+            mine = merged.filter((pl.col("model_id") == mid) & (pl.col("perturbation") == "p0"))
+            have = set(zip(mine["incident_id"].to_list(), mine["condition"].to_list(), strict=True))
+            missing = [f"{i}|{c}" for i in incidents for c in CONDITIONS if (i, c) not in have]
+            completeness.append(
+                {
+                    "model": mid,
+                    "runs": mine.height,
+                    "expected": len(incidents) * len(CONDITIONS),
+                    "missing": len(missing),
+                    "missing_examples": missing[:5],
+                    "unparsed": int((~mine["parsed_ok"].fill_null(False)).sum()),
+                }
+            )
+        result: dict[str, Any] = {
+            "exports": per_file,
+            "queue_vs_export": queue_vs_export,
+            "conflicting_run_ids": conflicts[:10],
+            "completeness": completeness,
+            "merged_rows": merged.height,
+            "problems": checks or ["none"],
+            "written_to": None,
+        }
+        if write:
+            if conflicts:
+                raise ToolError(
+                    "Not writing: some run_ids differ between exports. Fix those first."
+                )
+            target = next((f.source for f in files), None) or next(iter(self.store.sources))
+            if target == "published":
+                raise ToolError("Refusing to write into the public release dataset.")
+            with tempfile.TemporaryDirectory() as tmp:
+                out = Path(tmp) / "runs.parquet"
+                merged.select(RUN_COLUMNS).sort("run_id").write_parquet(out, compression="zstd")
+                name = "runs/runs.parquet" if target == "local" else "runs.parquet"
+                try:
+                    result["written_to"] = self.store.source(target).upload(
+                        out, name, f"merge: {merged.height} runs"
+                    )
+                except Exception as e:
+                    raise ToolError(
+                        f"could not write the merged file: {type(e).__name__}: {e}"
+                    ) from e
+        return result
+
+    def score_summary(
+        self,
+        models: list[str] | None = None,
+        conditions: list[str] | None = None,
+        group_by: list[str] | None = None,
+        perturbation: str = "p0",
+        source: str = "all",
+    ) -> dict[str, Any]:
+        keys = group_by or ["model", "condition"]
+        bad = [k for k in keys if k not in GROUP_KEYS]
+        if bad:
+            raise ToolError(f"can't group by {bad}; choose from {list(GROUP_KEYS)}")
+        df = self._filter(self._runs(source), models, conditions, perturbation)
+        if not df.height:
+            return {"rows": [], "note": "No runs match."}
+        cols = [GROUP_KEYS[k] for k in keys]
+        rows = []
+        for key, g in df.sort(cols).group_by(cols, maintain_order=True):
+            top1 = _bools(g["top1"])
+            healthy = g.filter(pl.col("fault") == "healthy")
+            row = dict(zip(keys, key, strict=True))
+            row.update(
+                runs=g.height,
+                top1=stats.rate(top1),
+                top1_95ci=stats.bootstrap_ci(top1),
+                top3=stats.rate(_bools(g["top3"])),
+                layer=stats.rate(_bools(g["layer_ok"])),
+                evidence_validity=round(float(g["evidence_validity"].fill_null(0).mean()), 4),
+                parsed=stats.rate(_bools(g["parsed_ok"])),
+                mean_confidence=(
+                    round(float(c), 3)
+                    if (c := g["confidence"].drop_nulls().mean()) is not None
+                    else None
+                ),
+                healthy_false_alarms=(
+                    f"{int((healthy['parsed_ok'].fill_null(False) & ~healthy['top1'].fill_null(False)).sum())}"
+                    f" of {healthy.height}"
+                    if healthy.height
+                    else None
+                ),
+            )
+            rows.append(row)
+        return {
+            "rows": rows,
+            "perturbation": perturbation,
+            "note": "Mock data: made-up numbers." if self.settings.mock else None,
+        }
+
+    def compare_models(
+        self,
+        model_a: str,
+        model_b: str,
+        condition: str = "combined",
+        metric: str = "top1",
+        perturbation: str = "p0",
+    ) -> dict[str, Any]:
+        if metric not in ("top1", "top3", "layer_ok", "parsed_ok"):
+            raise ToolError("metric must be top1, top3, layer_ok or parsed_ok")
+        df = self._filter(self._runs(), [model_a, model_b], [condition], perturbation)
+        a = df.filter(pl.col("model_id") == model_a).select(
+            "incident_id", pl.col(metric).fill_null(False).alias("a")
+        )
+        b = df.filter(pl.col("model_id") == model_b).select(
+            "incident_id", pl.col(metric).fill_null(False).alias("b")
+        )
+        j = a.join(b, on="incident_id")
+        if not j.height:
+            raise ToolError("The two models share no scored snapshots under that condition.")
+        both = int((j["a"] & j["b"]).sum())
+        only_a = int((j["a"] & ~j["b"]).sum())
+        only_b = int((~j["a"] & j["b"]).sum())
+        neither = j.height - both - only_a - only_b
+        diff = round((only_a - only_b) / j.height, 4)
+        return {
+            "paired_snapshots": j.height,
+            "metric": metric,
+            model_a: stats.rate(_bools(j["a"])),
+            model_b: stats.rate(_bools(j["b"])),
+            "difference_a_minus_b": diff,
+            "both_right": both,
+            "only_a_right": only_a,
+            "only_b_right": only_b,
+            "both_wrong": neither,
+            "mcnemar_exact_p": stats.mcnemar_exact(only_a, only_b),
+            "only_a_examples": j.filter(pl.col("a") & ~pl.col("b"))["incident_id"].to_list()[:5],
+            "only_b_examples": j.filter(~pl.col("a") & pl.col("b"))["incident_id"].to_list()[:5],
+            "reading": (
+                "No reliable difference at this sample size."
+                if stats.mcnemar_exact(only_a, only_b) >= 0.05
+                else f"{model_a if diff > 0 else model_b} is reliably better here (p < 0.05)."
+            ),
+        }
+
+    def show_cases(
+        self,
+        model: str,
+        condition: str = "combined",
+        kind: str = "wrong",
+        fault: str | None = None,
+        limit: int = 5,
+        include_raw: bool = False,
+        perturbation: str = "p0",
+    ) -> dict[str, Any]:
+        if kind not in CASE_KINDS:
+            raise ToolError(f"kind must be one of {list(CASE_KINDS)}")
+        df = self._filter(self._runs(), [model], [condition], perturbation)
+        parsed = pl.col("parsed_ok").fill_null(False)
+        top1 = pl.col("top1").fill_null(False)
+        healthy = pl.col("fault") == "healthy"
+        pick = {
+            "wrong": parsed & ~top1 & ~healthy,
+            "right": top1 & ~healthy,
+            "unparsed": ~parsed,
+            "overconfident": parsed & ~top1 & ~healthy & (pl.col("confidence").fill_null(0) >= 0.8),
+            "false_alarm": parsed & ~top1 & healthy,
+        }[kind]
+        sub = df.filter(pick)
+        if fault:
+            sub = sub.filter(pl.col("fault") == fault)
+        sub = sub.sort("incident_id")
+        cases = []
+        for r in sub.head(max(1, min(limit, 20))).to_dicts():
+            case = {
+                "incident": r["incident_id"],
+                "fault": r["fault"],
+                "fault_group": r["fault_group"],
+                "top1": r["top1"],
+                "top3": r["top3"],
+                "layer_ok": r["layer_ok"],
+                "evidence_validity": r["evidence_validity"],
+                "answer": outputs.summarise(r["raw_output"]),
+            }
+            if include_raw:
+                case["raw_output"] = (r["raw_output"] or "")[:4000]
+            cases.append(case)
+        return {
+            "matching": sub.height,
+            "shown": len(cases),
+            "kind": kind,
+            "cases": cases,
+            "note": "The fault name is the incident's ground truth; the model never saw it.",
+        }
