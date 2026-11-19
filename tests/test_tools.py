@@ -139,3 +139,23 @@ def test_condition_effect_errors(tools):
         tools.condition_effect("qwen3-8b-q4@ollama", metric="speed")
     with pytest.raises(ToolError, match="no results"):
         tools.condition_effect("gpt-5@nowhere")
+
+
+def test_layer_gap_compares_network_with_application(tools):
+    r = tools.layer_gap("qwen3-8b-q4@ollama")
+    g = r["groups"]
+    assert g["application"]["runs"] == 20 and g["network"]["runs"] == 8
+    assert g["hardware"]["runs"] == 12
+    gap = g["network"]["layer_accuracy"] - g["application"]["layer_accuracy"]
+    assert r["gap_network_minus_application"] == round(gap, 4)
+    assert 0 <= r["fisher_exact_p"] <= 1 and r["reading"]
+    pooled = tools.layer_gap("qwen3-8b-q4@ollama", condition="all")
+    assert pooled["groups"]["network"]["runs"] == 32 and "too small" in pooled["caveat"]
+
+
+def test_fisher_exact_matches_known_values():
+    from rootline_mcp.stats import fisher_exact
+
+    assert fisher_exact(1, 9, 11, 3) == 0.0028  # classic tea-tasting style table
+    assert fisher_exact(3, 1, 1, 3) == 0.4857
+    assert fisher_exact(0, 0, 5, 5) == 1.0

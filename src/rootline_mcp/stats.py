@@ -35,3 +35,19 @@ def mcnemar_exact(only_a: int, only_b: int) -> float:
     k = min(only_a, only_b)
     tail = sum(math.comb(n, i) for i in range(k + 1)) / 2**n
     return round(min(1.0, 2 * tail), 4)
+
+
+def fisher_exact(a: int, b: int, c: int, d: int) -> float:
+    """Two-sided Fisher's exact p-value for the 2x2 table [[a, b], [c, d]]."""
+    row1, row2, col1 = a + b, c + d, a + c
+    n = row1 + row2
+    if n == 0 or row1 == 0 or row2 == 0 or col1 in (0, n):
+        return 1.0
+
+    def prob(x: int) -> float:
+        return math.comb(row1, x) * math.comb(row2, col1 - x) / math.comb(n, col1)
+
+    observed = prob(a)
+    lo, hi = max(0, col1 - row2), min(row1, col1)
+    total = sum(p for x in range(lo, hi + 1) if (p := prob(x)) <= observed * (1 + 1e-7))
+    return round(min(1.0, total), 4)

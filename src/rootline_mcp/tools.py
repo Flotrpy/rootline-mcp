@@ -557,6 +557,67 @@ class Tools:
             "note": "Mock data: made-up numbers." if self.settings.mock else None,
         }
 
+    def layer_gap(
+        self,
+        model: str,
+        condition: str = "combined",
+        perturbation: str = "p0",
+        source: str = "all",
+    ) -> dict[str, Any]:
+        """Layer accuracy on network vs application faults, with Fisher's exact test (RQ2)."""
+        conditions = None if condition == "all" else [condition]
+        df = self._filter(self._runs(source), [model], conditions, perturbation)
+        if not df.height:
+            raise ToolError(f"{model} has no scored runs under {condition} yet.")
+        groups = {}
+        for g in ("application", "network", "hardware"):
+            sub = df.filter(pl.col("fault_group") == g)
+            ok = _bools(sub["layer_ok"])
+            groups[g] = {
+                "runs": sub.height,
+                "layer_right": sum(ok),
+                "layer_accuracy": stats.rate(ok),
+                "layer_95ci": stats.bootstrap_ci(ok),
+                "top1": stats.rate(_bools(sub["top1"])),
+            }
+        app, net = groups["application"], groups["network"]
+        if not app["runs"] or not net["runs"]:
+            raise ToolError("Need runs on both application and network faults to compare.")
+        p = stats.fisher_exact(
+            net["layer_right"],
+            net["runs"] - net["layer_right"],
+            app["layer_right"],
+            app["runs"] - app["layer_right"],
+        )
+        gap = round(net["layer_accuracy"] - app["layer_accuracy"], 4)
+        if p >= 0.05:
+            reading = "No reliable layer-accuracy gap between network and application faults."
+        elif gap < 0:
+            reading = (
+                "The model places network faults in the right layer reliably less often (p < 0.05)."
+            )
+        else:
+            reading = (
+                "The model places network faults in the right layer reliably more often (p < 0.05)."
+            )
+        return {
+            "model": model,
+            "condition": condition,
+            "perturbation": perturbation,
+            "groups": groups,
+            "gap_network_minus_application": gap,
+            "fisher_exact_p": p,
+            "reading": reading,
+            "caveat": (
+                "Snapshots differ between the groups, so this is an unpaired test; with "
+                "condition='all' the same snapshot counts once per condition, which makes "
+                "the p-value too small."
+                if condition == "all"
+                else "Snapshots differ between the groups, so this is an unpaired test."
+            ),
+            "note": "Mock data: made-up numbers." if self.settings.mock else None,
+        }
+
     def show_cases(
         self,
         model: str,

@@ -4,6 +4,8 @@ One line per change, newest first. The daily feature routine adds to this.
 
 ## Unreleased
 
+- 2026-11-19: `rootline_layer_gap`: layer accuracy on network vs application faults with
+  Fisher's exact test (RQ2).
 - 2026-11-18: `rootline_condition_effect`: combined evidence vs each single signal,
   paired, with McNemar's exact test against the best single signal (RQ1).
 

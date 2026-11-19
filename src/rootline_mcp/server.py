@@ -178,6 +178,22 @@ def build_server(settings: Settings, runs_allowed: bool, tools: Tools | None = N
         signal and tests combined vs it with McNemar's exact test (the paper's RQ1)."""
         return _call(t.condition_effect, model, metric, perturbation, source)
 
+    @mcp.tool(name="rootline_layer_gap", annotations=READ)
+    def layer_gap(
+        model: Model,
+        condition: Annotated[
+            str, Field(description="metrics, traces, logs, combined, or all to pool them")
+        ] = "combined",
+        perturbation: Annotated[str, Field(description="p0 or p1")] = "p0",
+        source: Annotated[
+            str, Field(description="all, published or work (private working results)")
+        ] = "all",
+    ) -> dict[str, Any]:
+        """Is the model worse at placing network faults in the right layer? Layer accuracy
+        (with 95% intervals) for application, network and hardware faults, and Fisher's exact
+        test for network vs application (the paper's RQ2)."""
+        return _call(t.layer_gap, model, condition, perturbation, source)
+
     @mcp.tool(name="rootline_show_cases", annotations=READ)
     def show_cases(
         model: Model,
