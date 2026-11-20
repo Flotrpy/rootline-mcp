@@ -14,7 +14,7 @@ models actually answered. Free to run: no paid service, no card.
 | `rootline_run_status` | Done, pending and failed jobs per queue, percent done, days left, last activity in Eastern time, and links to the latest runs. |
 | `rootline_list_failures` | Failed jobs grouped by error, with examples, and how many answers failed to parse. |
 | `rootline_merge_results` | Checks the per-provider exports before merging: conflicting run ids, queue count vs export rows, missing snapshot × condition cells, unparsed answers. `write=true` saves `runs.parquet` to the private working dataset. |
-| `rootline_score_summary` | Top-1 with a 95% bootstrap interval, top-3, layer, evidence validity, parse rate, confidence and healthy false alarms, grouped by model, condition, fault, fault group (application / network / hardware / healthy), perturbation or incident. |
+| `rootline_score_summary` | Top-1 with a 95% bootstrap interval, top-3, layer, evidence validity, parse rate, confidence and healthy false alarms, grouped by model, condition, fault, fault group (application / network / hardware / healthy), perturbation or incident. `link_rule="either_end"` gives the exploratory rescoring that accepts either end of a broken link. |
 | `rootline_compare_models` | Paired comparison on the same snapshots with McNemar's exact test and example snapshots where the two models differ. |
 | `rootline_condition_effect` | Combined evidence vs each single signal on the same snapshots, the best single signal, and McNemar's exact test for combined vs that one (the paper's RQ1). |
 | `rootline_layer_gap` | Layer accuracy for application, network and hardware faults with 95% intervals, and Fisher's exact test for network vs application (the paper's RQ2). |

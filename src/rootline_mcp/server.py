@@ -146,11 +146,18 @@ def build_server(settings: Settings, runs_allowed: bool, tools: Tools | None = N
         ] = None,
         perturbation: Annotated[str, Field(description="p0 or p1")] = "p0",
         source: Annotated[str, Field(description="all, published, work or local")] = "all",
+        link_rule: Annotated[
+            str,
+            Field(
+                description="official (pre-registered: the downstream end of a broken link) or either_end (exploratory: either end of the link counts, p0 only)"
+            ),
+        ] = "official",
     ) -> dict[str, Any]:
         """Scores table: top-1 with a 95% bootstrap interval, top-3, layer accuracy, evidence
         validity, parse rate, mean confidence and healthy false alarms, grouped as asked.
-        group_by=["model","group"] splits application vs network vs hardware faults."""
-        return _call(t.score_summary, models, conditions, group_by, perturbation, source)
+        group_by=["model","group"] splits application vs network vs hardware faults.
+        link_rule="either_end" gives the README's exploratory link-fault rescoring."""
+        return _call(t.score_summary, models, conditions, group_by, perturbation, source, link_rule)
 
     @mcp.tool(name="rootline_compare_models", annotations=READ)
     def compare_models(

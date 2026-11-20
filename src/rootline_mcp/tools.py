@@ -16,6 +16,7 @@ import polars as pl
 from rootline_mcp import outputs, stats
 from rootline_mcp.catalog import (
     CONDITIONS,
+    EDGES,
     MODELS,
     estimate_days,
     fault_of,
@@ -70,6 +71,24 @@ def _with_facets(df: pl.DataFrame) -> pl.DataFrame:
 
 def _bools(series: pl.Series) -> list[bool]:
     return [bool(x) for x in series.fill_null(False).to_list()]
+
+
+def _rescore_either_end(df: pl.DataFrame) -> pl.DataFrame:
+    """top1/top3 under the either-end rule for link faults; other faults unchanged."""
+
+    def hit(k: int) -> pl.Expr:
+        return pl.struct("raw_output", "fault").map_elements(
+            lambda r: (
+                r["fault"] in EDGES
+                and outputs.names_edge_end(r["raw_output"], *EDGES[r["fault"]], k)
+            ),
+            return_dtype=pl.Boolean,
+        )
+
+    return df.with_columns(
+        (pl.col("top1").fill_null(False) | hit(1)).alias("top1"),
+        (pl.col("top3").fill_null(False) | hit(3)).alias("top3"),
+    )
 
 
 @dataclass
@@ -400,14 +419,21 @@ class Tools:
         group_by: list[str] | None = None,
         perturbation: str = "p0",
         source: str = "all",
+        link_rule: str = "official",
     ) -> dict[str, Any]:
         keys = group_by or ["model", "condition"]
         bad = [k for k in keys if k not in GROUP_KEYS]
         if bad:
             raise ToolError(f"can't group by {bad}; choose from {list(GROUP_KEYS)}")
+        if link_rule not in ("official", "either_end"):
+            raise ToolError("link_rule must be official or either_end")
+        if link_rule == "either_end" and perturbation != "p0":
+            raise ToolError("either_end needs real service names, so use perturbation p0")
         df = self._filter(self._runs(source), models, conditions, perturbation)
         if not df.height:
             return {"rows": [], "note": "No runs match."}
+        if link_rule == "either_end":
+            df = _rescore_either_end(df)
         cols = [GROUP_KEYS[k] for k in keys]
         rows = []
         for key, g in df.sort(cols).group_by(cols, maintain_order=True):
@@ -438,6 +464,14 @@ class Tools:
         return {
             "rows": rows,
             "perturbation": perturbation,
+            "link_rule": link_rule,
+            "link_rule_note": (
+                "Exploratory, not pre-registered: on a link fault, naming either end of the "
+                "link with the right category counts as correct. Hypothesis tests use the "
+                "official rule."
+                if link_rule == "either_end"
+                else None
+            ),
             "note": "Mock data: made-up numbers." if self.settings.mock else None,
         }
 

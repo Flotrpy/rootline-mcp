@@ -170,3 +170,46 @@ def test_condition_effect_uses_snapshots_common_to_all_conditions(tools):
     assert 0 < n < 42 and n <= min(r["snapshots_per_condition"].values())
     assert all(s["paired_snapshots"] == n for s in r["combined_vs_each"])
     assert len({s["combined_rate"] for s in r["combined_vs_each"]}) == 1
+
+
+def test_either_end_only_raises_link_fault_scores(tools):
+    off = tools.score_summary(group_by=["model", "fault"])["rows"]
+    eth = tools.score_summary(group_by=["model", "fault"], link_rule="either_end")
+    assert eth["link_rule"] == "either_end" and "Exploratory" in eth["link_rule_note"]
+    key = {(r["model"], r["fault"]): r for r in off}
+    from rootline_mcp.catalog import EDGES
+
+    raised = 0
+    for r in eth["rows"]:
+        o = key[(r["model"], r["fault"])]
+        if r["fault"] in EDGES:
+            assert r["top1"] >= o["top1"] and r["top3"] >= o["top3"]
+            raised += r["top1"] > o["top1"]
+        else:
+            assert (r["top1"], r["top3"]) == (o["top1"], o["top3"])
+    assert raised > 0  # mock wrong answers sometimes blame checkout with network_latency
+    with pytest.raises(ToolError, match="p0"):
+        tools.score_summary(link_rule="either_end", perturbation="p1")
+    with pytest.raises(ToolError, match="link_rule"):
+        tools.score_summary(link_rule="nearby")
+
+
+def test_names_edge_end():
+    import json
+
+    from rootline_mcp.outputs import names_edge_end
+
+    raw = json.dumps(
+        {
+            "hypotheses": [
+                {"rank": 2, "service": "Payment", "category": "network-latency"},
+                {"rank": 1, "service": "cart", "category": "error"},
+            ]
+        }
+    )
+    ends = ("checkout", "payment")
+    assert not names_edge_end(raw, ends, "network_latency", 1)
+    assert names_edge_end(raw, ends, "network_latency", 3)
+    assert not names_edge_end(raw, ends, "network_reset", 3)
+    assert not names_edge_end('{"abstain": true}', ends, "network_latency", 3)
+    assert not names_edge_end("not json", ends, "network_latency", 3)
