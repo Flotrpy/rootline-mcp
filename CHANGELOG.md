@@ -5,7 +5,8 @@ One line per change, newest first. The daily feature routine adds to this.
 ## Unreleased
 
 - 2026-11-18: `rootline_condition_effect`: combined evidence vs each single signal,
-  paired, with McNemar's exact test against the best single signal (RQ1).
+  paired on the snapshots all four conditions share, with McNemar's exact test against
+  the best single signal (RQ1).
 
 ## 0.1.0 (2026-11-18)
 
