@@ -503,14 +503,24 @@ class Tools:
             )
             for c in CONDITIONS
         }
-        combined = by_cond["combined"]
-        if not combined.height:
+        if not by_cond["combined"].height:
             raise ToolError(f"{model} has no scored runs under the combined condition yet.")
+        coverage = {c: by_cond[c].height for c in CONDITIONS}
+        # Compare every signal on the same snapshots, or a signal scored on an easier
+        # subset (partial runs) could look best.
+        common = set(by_cond["combined"]["incident_id"].to_list())
+        for c in CONDITIONS:
+            common &= set(by_cond[c]["incident_id"].to_list())
+        if not common:
+            raise ToolError(
+                f"No snapshot of {model} is scored under all four conditions yet "
+                f"(snapshots per condition: {coverage})."
+            )
+        keep = pl.col("incident_id").is_in(sorted(common))
+        combined = by_cond["combined"].filter(keep)
         singles = []
         for c in (c for c in CONDITIONS if c != "combined"):
-            j = combined.join(by_cond[c], on="incident_id")
-            if not j.height:
-                continue
+            j = combined.join(by_cond[c].filter(keep), on="incident_id")
             only_comb = int((j["combined"] & ~j[c]).sum())
             only_single = int((~j["combined"] & j[c]).sum())
             p = stats.mcnemar_exact(only_comb, only_single)
@@ -528,8 +538,6 @@ class Tools:
                     "mcnemar_exact_p": p,
                 }
             )
-        if not singles:
-            raise ToolError(f"{model} has no single-signal runs paired with combined ones yet.")
         best = max(singles, key=lambda r: (r["single_rate"] or 0, -r["paired_snapshots"]))
         diff = best["difference_combined_minus_single"]
         if best["mcnemar_exact_p"] >= 0.05:
@@ -545,6 +553,8 @@ class Tools:
             "model": model,
             "metric": metric,
             "perturbation": perturbation,
+            "common_snapshots": len(common),
+            "snapshots_per_condition": coverage,
             "best_single": best["condition"],
             "combined_vs_best": best,
             "combined_vs_each": singles,
