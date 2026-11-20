@@ -117,3 +117,36 @@ def test_show_cases(tools):
         "qwen3-8b-q4@ollama", condition="metrics", kind="unparsed", include_raw=True
     )
     assert all(not c["answer"]["readable"] and "raw_output" in c for c in un["cases"])
+
+
+def test_condition_effect_pairs_combined_with_each_single(tools):
+    r = tools.condition_effect("qwen3-8b-q4@ollama")
+    singles = {s["condition"]: s for s in r["combined_vs_each"]}
+    assert set(singles) == {"metrics", "traces", "logs"}
+    assert all(s["paired_snapshots"] == 42 for s in singles.values())
+    assert r["common_snapshots"] == 42
+    best = r["combined_vs_best"]
+    assert r["best_single"] == best["condition"]
+    assert best["single_rate"] == max(s["single_rate"] for s in singles.values())
+    for s in singles.values():
+        diff = (s["only_combined_right"] - s["only_single_right"]) / 42
+        assert s["difference_combined_minus_single"] == round(diff, 4)
+        assert 0 <= s["mcnemar_exact_p"] <= 1
+    assert r["reading"] and "exploratory" in r["caveat"]
+
+
+def test_condition_effect_errors(tools):
+    with pytest.raises(ToolError, match="metric"):
+        tools.condition_effect("qwen3-8b-q4@ollama", metric="speed")
+    with pytest.raises(ToolError, match="no results"):
+        tools.condition_effect("gpt-5@nowhere")
+
+
+def test_condition_effect_uses_snapshots_common_to_all_conditions(tools):
+    # The mock Groq results are partial (150 of 168 jobs), so conditions cover
+    # different snapshots; every comparison must use the same shared set.
+    r = tools.condition_effect("gpt-oss-120b@groq")
+    n = r["common_snapshots"]
+    assert 0 < n < 42 and n <= min(r["snapshots_per_condition"].values())
+    assert all(s["paired_snapshots"] == n for s in r["combined_vs_each"])
+    assert len({s["combined_rate"] for s in r["combined_vs_each"]}) == 1
