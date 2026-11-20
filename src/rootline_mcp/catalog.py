@@ -38,6 +38,21 @@ def fault_of(incident_id: str) -> str:
     return m.group("fault") if m else incident_id
 
 
+# Faults on a link between two services (mirrors the controller catalog). The official
+# label names the downstream end; the exploratory "either_end" rule also accepts the
+# caller, with the same category.
+EDGES: Final[dict[str, tuple[tuple[str, str], str]]] = {
+    "paymentUnreachable": (("checkout", "payment"), "dependency_unavailable"),
+    "toxiLatency": (("checkout", "payment"), "network_latency"),
+    "toxiReset": (("checkout", "payment"), "network_reset"),
+    "netemLoss": (("frontend", "product-catalog"), "network_loss"),
+    "toxiBandwidth": (("frontend", "product-catalog"), "network_throughput"),
+    "hwWeakSignal": (("checkout", "payment"), "network_loss"),
+    "hwContention": (("checkout", "payment"), "network_latency"),
+    "hwWifiOutage": (("checkout", "payment"), "network_reset"),
+}
+
+
 def group_of(fault: str) -> str:
     """application, network, hardware, healthy or unknown."""
     if fault in APP_FAULTS:

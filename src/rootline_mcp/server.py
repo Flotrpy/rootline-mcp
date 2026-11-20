@@ -146,11 +146,18 @@ def build_server(settings: Settings, runs_allowed: bool, tools: Tools | None = N
         ] = None,
         perturbation: Annotated[str, Field(description="p0 or p1")] = "p0",
         source: Annotated[str, Field(description="all, published, work or local")] = "all",
+        link_rule: Annotated[
+            str,
+            Field(
+                description="official (pre-registered: the downstream end of a broken link) or either_end (exploratory: either end of the link counts, p0 only)"
+            ),
+        ] = "official",
     ) -> dict[str, Any]:
         """Scores table: top-1 with a 95% bootstrap interval, top-3, layer accuracy, evidence
         validity, parse rate, mean confidence and healthy false alarms, grouped as asked.
-        group_by=["model","group"] splits application vs network vs hardware faults."""
-        return _call(t.score_summary, models, conditions, group_by, perturbation, source)
+        group_by=["model","group"] splits application vs network vs hardware faults.
+        link_rule="either_end" gives the README's exploratory link-fault rescoring."""
+        return _call(t.score_summary, models, conditions, group_by, perturbation, source, link_rule)
 
     @mcp.tool(name="rootline_compare_models", annotations=READ)
     def compare_models(
@@ -163,6 +170,36 @@ def build_server(settings: Settings, runs_allowed: bool, tools: Tools | None = N
         """Paired comparison of two models on the same snapshots: both right, only one right,
         both wrong, and McNemar's exact test, with example snapshots where they differ."""
         return _call(t.compare_models, model_a, model_b, condition, metric, perturbation)
+
+    @mcp.tool(name="rootline_condition_effect", annotations=READ)
+    def condition_effect(
+        model: Model,
+        metric: Annotated[str, Field(description="top1, top3, layer_ok or parsed_ok")] = "top1",
+        perturbation: Annotated[str, Field(description="p0 or p1")] = "p0",
+        source: Annotated[
+            str, Field(description="all, published or work (private working results)")
+        ] = "all",
+    ) -> dict[str, Any]:
+        """Does giving the model all evidence help? Compares the combined condition with each
+        single signal (metrics, traces, logs) on the same snapshots, names the best single
+        signal and tests combined vs it with McNemar's exact test (the paper's RQ1)."""
+        return _call(t.condition_effect, model, metric, perturbation, source)
+
+    @mcp.tool(name="rootline_layer_gap", annotations=READ)
+    def layer_gap(
+        model: Model,
+        condition: Annotated[
+            str, Field(description="metrics, traces, logs, combined, or all to pool them")
+        ] = "combined",
+        perturbation: Annotated[str, Field(description="p0 or p1")] = "p0",
+        source: Annotated[
+            str, Field(description="all, published or work (private working results)")
+        ] = "all",
+    ) -> dict[str, Any]:
+        """Is the model worse at placing network faults in the right layer? Layer accuracy
+        (with 95% intervals) for application, network and hardware faults, and Fisher's exact
+        test for network vs application (the paper's RQ2)."""
+        return _call(t.layer_gap, model, condition, perturbation, source)
 
     @mcp.tool(name="rootline_show_cases", annotations=READ)
     def show_cases(
