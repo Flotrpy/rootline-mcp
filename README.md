@@ -17,7 +17,8 @@ models actually answered. Free to run: no paid service, no card.
 | `rootline_score_summary` | Top-1 with a 95% bootstrap interval, top-3, layer, evidence validity, parse rate, confidence and healthy false alarms, grouped by model, condition, fault, fault group (application / network / hardware / healthy), perturbation or incident. `link_rule="either_end"` gives the exploratory rescoring that accepts either end of a broken link. |
 | `rootline_compare_models` | Paired comparison on the same snapshots with McNemar's exact test and example snapshots where the two models differ. |
 | `rootline_condition_effect` | Combined evidence vs each single signal on the same snapshots, the best single signal, and McNemar's exact test for combined vs that one (the paper's RQ1). |
-| `rootline_layer_gap` | Layer accuracy for application, network and hardware faults with 95% intervals, and Fisher's exact test for network vs application (the paper's RQ2). |
+| `rootline_layer_gap` | Layer accuracy for application, network and hardware faults with 95% intervals, and Fisher's exact test for network (hardware included) vs application (the paper's RQ2, unadjusted). |
+| `rootline_hardest_snapshots` | Snapshots ranked by the share of model × condition runs that got them right, with each one's fault and group. |
 | `rootline_show_cases` | Real answers next to the true fault: wrong, right, unparsed, overconfident or false alarms on healthy snapshots. |
 
 ## How it works

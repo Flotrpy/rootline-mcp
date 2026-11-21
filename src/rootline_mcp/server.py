@@ -198,8 +198,21 @@ def build_server(settings: Settings, runs_allowed: bool, tools: Tools | None = N
     ) -> dict[str, Any]:
         """Is the model worse at placing network faults in the right layer? Layer accuracy
         (with 95% intervals) for application, network and hardware faults, and Fisher's exact
-        test for network vs application (the paper's RQ2)."""
+        test for network (hardware included, as in the paper's RQ2) vs application."""
         return _call(t.layer_gap, model, condition, perturbation, source)
+
+    @mcp.tool(name="rootline_hardest_snapshots", annotations=READ)
+    def hardest_snapshots(
+        metric: Annotated[str, Field(description="top1, top3 or layer_ok")] = "top1",
+        perturbation: Annotated[str, Field(description="p0 or p1")] = "p0",
+        source: Annotated[
+            str, Field(description="all, published or work (private working results)")
+        ] = "all",
+        limit: Annotated[int, Field(ge=1, le=42)] = 10,
+    ) -> dict[str, Any]:
+        """Which snapshots trip models up? Ranks snapshots by the share of model x condition
+        runs that got them right, with their fault and group, plus how many no run got right."""
+        return _call(t.hardest_snapshots, metric, perturbation, source, limit)
 
     @mcp.tool(name="rootline_show_cases", annotations=READ)
     def show_cases(

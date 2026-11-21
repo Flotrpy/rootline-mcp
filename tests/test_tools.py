@@ -147,11 +147,16 @@ def test_layer_gap_compares_network_with_application(tools):
     g = r["groups"]
     assert g["application"]["runs"] == 20 and g["network"]["runs"] == 8
     assert g["hardware"]["runs"] == 12
-    gap = g["network"]["layer_accuracy"] - g["application"]["layer_accuracy"]
+    # RQ2 counts the hardware cases as network: 20 vs 20.
+    both = g["network_and_hardware"]
+    assert both["runs"] == 20
+    gap = both["layer_accuracy"] - g["application"]["layer_accuracy"]
     assert r["gap_network_minus_application"] == round(gap, 4)
-    assert 0 <= r["fisher_exact_p"] <= 1 and r["reading"]
+    assert 0 <= r["fisher_exact_p"] <= 1 and "reliably" not in r["reading"]
+    assert "Holm" in r["caveat"]
     pooled = tools.layer_gap("qwen3-8b-q4@ollama", condition="all")
     assert pooled["groups"]["network"]["runs"] == 32 and "too small" in pooled["caveat"]
+    assert "no significance reading" in pooled["reading"]
 
 
 def test_fisher_exact_matches_known_values():
@@ -213,3 +218,38 @@ def test_names_edge_end():
     assert not names_edge_end(raw, ends, "network_reset", 3)
     assert not names_edge_end('{"abstain": true}', ends, "network_latency", 3)
     assert not names_edge_end("not json", ends, "network_latency", 3)
+
+
+def test_either_end_ignores_unparsed_answers():
+    import json
+
+    from rootline_mcp.tools import _rescore_either_end
+
+    raw = json.dumps(
+        {"hypotheses": [{"rank": 1, "service": "checkout", "category": "network_latency"}]}
+    )
+    df = pl.DataFrame(
+        {
+            "raw_output": [raw, raw],
+            "fault": ["toxiLatency", "toxiLatency"],
+            "parsed_ok": [True, False],
+            "top1": [False, False],
+            "top3": [False, False],
+        }
+    )
+    out = _rescore_either_end(df)
+    assert out["top1"].to_list() == [True, False]
+    assert out["top3"].to_list() == [True, False]
+
+
+def test_hardest_snapshots_ranks_by_share_right(tools):
+    r = tools.hardest_snapshots(limit=5)
+    assert r["snapshots"] == 42 and len(r["hardest"]) == 5
+    rates = [x["rate"] for x in r["hardest"]]
+    assert rates == sorted(rates)
+    assert r["hardest"][0]["rate"] <= r["easiest"][0]["rate"]
+    assert r["never_right"] == sum(
+        1 for x in tools.hardest_snapshots(limit=42)["hardest"] if x["right"] == 0
+    )
+    with pytest.raises(ToolError, match="metric"):
+        tools.hardest_snapshots(metric="parsed_ok")

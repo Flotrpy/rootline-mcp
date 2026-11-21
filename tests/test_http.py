@@ -67,6 +67,7 @@ def test_list_and_call_tools(app):
             "rootline_compare_models",
             "rootline_condition_effect",
             "rootline_layer_gap",
+            "rootline_hardest_snapshots",
             "rootline_show_cases",
         }
         assert all(t.get("description") for t in tools)

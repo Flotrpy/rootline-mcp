@@ -74,12 +74,17 @@ def _bools(series: pl.Series) -> list[bool]:
 
 
 def _rescore_either_end(df: pl.DataFrame) -> pl.DataFrame:
-    """top1/top3 under the either-end rule for link faults; other faults unchanged."""
+    """top1/top3 under the either-end rule for link faults; other faults unchanged.
+
+    Only answers the harness parsed (parsed_ok) can gain, so an answer that breaks the
+    response contract stays an abstention, as under the official rule.
+    """
 
     def hit(k: int) -> pl.Expr:
-        return pl.struct("raw_output", "fault").map_elements(
-            lambda r: (
-                r["fault"] in EDGES
+        return pl.struct("raw_output", "fault", "parsed_ok").map_elements(
+            lambda r: bool(
+                r["parsed_ok"]
+                and r["fault"] in EDGES
                 and outputs.names_edge_end(r["raw_output"], *EDGES[r["fault"]], k)
             ),
             return_dtype=pl.Boolean,
@@ -614,17 +619,24 @@ class Tools:
         if not df.height:
             raise ToolError(f"{model} has no scored runs under {condition} yet.")
         groups = {}
-        for g in ("application", "network", "hardware"):
-            sub = df.filter(pl.col("fault_group") == g)
+        parts = {
+            "application": ["application"],
+            "network": ["network"],
+            "hardware": ["hardware"],
+            "network_and_hardware": ["network", "hardware"],
+        }
+        for name, members in parts.items():
+            sub = df.filter(pl.col("fault_group").is_in(members))
             ok = _bools(sub["layer_ok"])
-            groups[g] = {
+            groups[name] = {
                 "runs": sub.height,
                 "layer_right": sum(ok),
                 "layer_accuracy": stats.rate(ok),
                 "layer_95ci": stats.bootstrap_ci(ok),
                 "top1": stats.rate(_bools(sub["top1"])),
             }
-        app, net = groups["application"], groups["network"]
+        # The paper's RQ2 counts the hardware-arm cases on the network side.
+        app, net = groups["application"], groups["network_and_hardware"]
         if not app["runs"] or not net["runs"]:
             raise ToolError("Need runs on both application and network faults to compare.")
         p = stats.fisher_exact(
@@ -634,15 +646,29 @@ class Tools:
             app["runs"] - app["layer_right"],
         )
         gap = round(net["layer_accuracy"] - app["layer_accuracy"], 4)
-        if p >= 0.05:
-            reading = "No reliable layer-accuracy gap between network and application faults."
-        elif gap < 0:
+        pooled = condition == "all"
+        if pooled:
             reading = (
-                "The model places network faults in the right layer reliably less often (p < 0.05)."
+                "Pooled conditions repeat each snapshot, so no significance reading is given; "
+                "run it per condition for a test."
             )
+        elif p >= 0.05:
+            reading = "No layer-accuracy gap between network and application faults at p < 0.05."
         else:
+            way = "less" if gap < 0 else "more"
             reading = (
-                "The model places network faults in the right layer reliably more often (p < 0.05)."
+                f"The model places network faults in the right layer {way} often "
+                "(unadjusted p < 0.05)."
+            )
+        caveat = (
+            "Network includes the hardware-arm cases, as in the paper's RQ2. Snapshots differ "
+            "between the groups, so this is an unpaired test, and p is not Holm-adjusted "
+            "across RQ1 and RQ2 as the paper does."
+        )
+        if pooled:
+            caveat += (
+                " With condition='all' the same snapshot counts once per condition, so the "
+                "p-value and the 95% intervals are too small."
             )
         return {
             "model": model,
@@ -652,12 +678,47 @@ class Tools:
             "gap_network_minus_application": gap,
             "fisher_exact_p": p,
             "reading": reading,
+            "caveat": caveat,
+            "note": "Mock data: made-up numbers." if self.settings.mock else None,
+        }
+
+    def hardest_snapshots(
+        self,
+        metric: str = "top1",
+        perturbation: str = "p0",
+        source: str = "all",
+        limit: int = 10,
+    ) -> dict[str, Any]:
+        """Snapshots ranked by how many model x condition runs got them right."""
+        if metric not in ("top1", "top3", "layer_ok"):
+            raise ToolError("metric must be top1, top3 or layer_ok")
+        df = self._filter(self._runs(source), perturbation=perturbation)
+        if not df.height:
+            raise ToolError(f"No scored runs under {perturbation} yet.")
+        per = (
+            df.group_by("incident_id", "fault", "fault_group")
+            .agg(
+                pl.len().alias("runs"),
+                pl.col(metric).fill_null(False).cast(pl.Int64).sum().alias("right"),
+            )
+            .with_columns((pl.col("right") / pl.col("runs")).round(4).alias("rate"))
+            .sort(["rate", "runs", "incident_id"], descending=[False, True, False])
+        )
+        rows = per.rename({"incident_id": "snapshot"}).to_dicts()
+        runs = per["runs"]
+        return {
+            "metric": metric,
+            "perturbation": perturbation,
+            "snapshots": per.height,
+            "never_right": int((per["right"] == 0).sum()),
+            "always_right": int((per["right"] == per["runs"]).sum()),
+            "hardest": rows[:limit],
+            "easiest": rows[::-1][:limit],
             "caveat": (
-                "Snapshots differ between the groups, so this is an unpaired test; with "
-                "condition='all' the same snapshot counts once per condition, which makes "
-                "the p-value too small."
-                if condition == "all"
-                else "Snapshots differ between the groups, so this is an unpaired test."
+                None
+                if runs.min() == runs.max()
+                else "Snapshots have different run counts (some results are partial), so "
+                "compare rates, not counts."
             ),
             "note": "Mock data: made-up numbers." if self.settings.mock else None,
         }
