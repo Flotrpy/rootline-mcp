@@ -52,3 +52,33 @@ def summarise(raw: str | None, max_hypotheses: int = 3) -> dict[str, Any]:
         ],
         "action": {"type": action.get("type"), "target": action.get("target")},
     }
+
+
+def norm_service(s: str) -> str:
+    """Same normalisation as the harness: case, spaces and underscores."""
+    return "-".join(s.strip().lower().replace("_", "-").split())
+
+
+def norm_category(s: str) -> str:
+    return "_".join(s.strip().lower().replace("-", " ").split())
+
+
+def names_edge_end(raw: str | None, ends: tuple[str, str], category: str, k: int) -> bool:
+    """True if one of the top-k hypotheses names either end of the link with the
+    right category (the README's exploratory either-end rescoring)."""
+    data = parse(raw)
+    if data is None or data.get("abstain"):
+        return False
+    hyps = data.get("hypotheses") if isinstance(data.get("hypotheses"), list) else []
+    ranked = sorted(
+        (h for h in hyps if isinstance(h, dict)),
+        key=lambda h: h.get("rank", 99) if isinstance(h.get("rank"), int) else 99,
+    )
+    want = {norm_service(e) for e in ends}
+    return any(
+        isinstance(h.get("service"), str)
+        and isinstance(h.get("category"), str)
+        and norm_service(h["service"]) in want
+        and norm_category(h["category"]) == category
+        for h in ranked[:k]
+    )
