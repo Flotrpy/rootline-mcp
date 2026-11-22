@@ -16,6 +16,7 @@ import polars as pl
 from rootline_mcp import outputs, stats
 from rootline_mcp.catalog import (
     CONDITIONS,
+    EDGES,
     MODELS,
     estimate_days,
     fault_of,
@@ -70,6 +71,29 @@ def _with_facets(df: pl.DataFrame) -> pl.DataFrame:
 
 def _bools(series: pl.Series) -> list[bool]:
     return [bool(x) for x in series.fill_null(False).to_list()]
+
+
+def _rescore_either_end(df: pl.DataFrame) -> pl.DataFrame:
+    """top1/top3 under the either-end rule for link faults; other faults unchanged.
+
+    Only answers the harness parsed (parsed_ok) can gain, so an answer that breaks the
+    response contract stays an abstention, as under the official rule.
+    """
+
+    def hit(k: int) -> pl.Expr:
+        return pl.struct("raw_output", "fault", "parsed_ok").map_elements(
+            lambda r: bool(
+                r["parsed_ok"]
+                and r["fault"] in EDGES
+                and outputs.names_edge_end(r["raw_output"], *EDGES[r["fault"]], k)
+            ),
+            return_dtype=pl.Boolean,
+        )
+
+    return df.with_columns(
+        (pl.col("top1").fill_null(False) | hit(1)).alias("top1"),
+        (pl.col("top3").fill_null(False) | hit(3)).alias("top3"),
+    )
 
 
 @dataclass
@@ -400,14 +424,21 @@ class Tools:
         group_by: list[str] | None = None,
         perturbation: str = "p0",
         source: str = "all",
+        link_rule: str = "official",
     ) -> dict[str, Any]:
         keys = group_by or ["model", "condition"]
         bad = [k for k in keys if k not in GROUP_KEYS]
         if bad:
             raise ToolError(f"can't group by {bad}; choose from {list(GROUP_KEYS)}")
+        if link_rule not in ("official", "either_end"):
+            raise ToolError("link_rule must be official or either_end")
+        if link_rule == "either_end" and perturbation != "p0":
+            raise ToolError("either_end needs real service names, so use perturbation p0")
         df = self._filter(self._runs(source), models, conditions, perturbation)
         if not df.height:
             return {"rows": [], "note": "No runs match."}
+        if link_rule == "either_end":
+            df = _rescore_either_end(df)
         cols = [GROUP_KEYS[k] for k in keys]
         rows = []
         for key, g in df.sort(cols).group_by(cols, maintain_order=True):
@@ -438,6 +469,14 @@ class Tools:
         return {
             "rows": rows,
             "perturbation": perturbation,
+            "link_rule": link_rule,
+            "link_rule_note": (
+                "Exploratory, not pre-registered: on a link fault, naming either end of the "
+                "link with the right category counts as correct. Hypothesis tests use the "
+                "official rule."
+                if link_rule == "either_end"
+                else None
+            ),
             "note": "Mock data: made-up numbers." if self.settings.mock else None,
         }
 
@@ -480,10 +519,245 @@ class Tools:
             "only_a_examples": j.filter(pl.col("a") & ~pl.col("b"))["incident_id"].to_list()[:5],
             "only_b_examples": j.filter(~pl.col("a") & pl.col("b"))["incident_id"].to_list()[:5],
             "reading": (
-                "No reliable difference at this sample size."
+                "No statistically significant difference at this sample size."
                 if stats.mcnemar_exact(only_a, only_b) >= 0.05
                 else f"{model_a if diff > 0 else model_b} is reliably better here (p < 0.05)."
             ),
+        }
+
+    def condition_effect(
+        self,
+        model: str,
+        metric: str = "top1",
+        perturbation: str = "p0",
+        source: str = "all",
+    ) -> dict[str, Any]:
+        """Combined evidence vs each single signal on the same snapshots (the paper's RQ1)."""
+        if metric not in ("top1", "top3", "layer_ok", "parsed_ok"):
+            raise ToolError("metric must be top1, top3, layer_ok or parsed_ok")
+        df = self._filter(self._runs(source), [model], None, perturbation)
+        by_cond = {
+            c: df.filter(pl.col("condition") == c).select(
+                "incident_id", pl.col(metric).fill_null(False).alias(c)
+            )
+            for c in CONDITIONS
+        }
+        if not by_cond["combined"].height:
+            raise ToolError(f"{model} has no scored runs under the combined condition yet.")
+        coverage = {c: by_cond[c].height for c in CONDITIONS}
+        # Compare every signal on the same snapshots, or a signal scored on an easier
+        # subset (partial runs) could look best.
+        common = set(by_cond["combined"]["incident_id"].to_list())
+        for c in CONDITIONS:
+            common &= set(by_cond[c]["incident_id"].to_list())
+        if not common:
+            raise ToolError(
+                f"No snapshot of {model} is scored under all four conditions yet "
+                f"(snapshots per condition: {coverage})."
+            )
+        keep = pl.col("incident_id").is_in(sorted(common))
+        combined = by_cond["combined"].filter(keep)
+        singles = []
+        for c in (c for c in CONDITIONS if c != "combined"):
+            j = combined.join(by_cond[c].filter(keep), on="incident_id")
+            only_comb = int((j["combined"] & ~j[c]).sum())
+            only_single = int((~j["combined"] & j[c]).sum())
+            p = stats.mcnemar_exact(only_comb, only_single)
+            singles.append(
+                {
+                    "condition": c,
+                    "paired_snapshots": j.height,
+                    "single_rate": stats.rate(_bools(j[c])),
+                    "combined_rate": stats.rate(_bools(j["combined"])),
+                    "difference_combined_minus_single": round(
+                        (only_comb - only_single) / j.height, 4
+                    ),
+                    "only_combined_right": only_comb,
+                    "only_single_right": only_single,
+                    "mcnemar_exact_p": p,
+                }
+            )
+        best = max(singles, key=lambda r: (r["single_rate"] or 0, -r["paired_snapshots"]))
+        diff = best["difference_combined_minus_single"]
+        if best["mcnemar_exact_p"] >= 0.05:
+            reading = (
+                f"No statistically significant difference between combined evidence and {best['condition']}, "
+                "the best single signal, at this sample size."
+            )
+        elif diff > 0:
+            reading = f"Combined evidence reliably beats {best['condition']} (p < 0.05)."
+        else:
+            reading = f"{best['condition']} alone reliably beats combined evidence (p < 0.05)."
+        return {
+            "model": model,
+            "metric": metric,
+            "perturbation": perturbation,
+            "common_snapshots": len(common),
+            "snapshots_per_condition": coverage,
+            "best_single": best["condition"],
+            "combined_vs_best": best,
+            "combined_vs_each": singles,
+            "reading": reading,
+            "caveat": (
+                "The best single signal is picked after looking at these results, so its "
+                "p-value is optimistic; treat it as exploratory unless the paper fixed the "
+                "comparison in advance."
+            ),
+            "note": "Mock data: made-up numbers." if self.settings.mock else None,
+        }
+
+    def layer_gap(
+        self,
+        model: str,
+        condition: str = "combined",
+        perturbation: str = "p0",
+        source: str = "all",
+    ) -> dict[str, Any]:
+        """Layer accuracy on network vs application faults, with Fisher's exact test (RQ2)."""
+        conditions = None if condition == "all" else [condition]
+        df = self._filter(self._runs(source), [model], conditions, perturbation)
+        if not df.height:
+            raise ToolError(f"{model} has no scored runs under {condition} yet.")
+        groups = {}
+        parts = {
+            "application": ["application"],
+            "network": ["network"],
+            "hardware": ["hardware"],
+            "network_and_hardware": ["network", "hardware"],
+        }
+        for name, members in parts.items():
+            sub = df.filter(pl.col("fault_group").is_in(members))
+            ok = _bools(sub["layer_ok"])
+            groups[name] = {
+                "runs": sub.height,
+                "layer_right": sum(ok),
+                "layer_accuracy": stats.rate(ok),
+                "layer_95ci": stats.bootstrap_ci(ok),
+                "top1": stats.rate(_bools(sub["top1"])),
+            }
+        # The paper's RQ2 counts the hardware-arm cases on the network side.
+        app, net = groups["application"], groups["network_and_hardware"]
+        if not app["runs"] or not net["runs"]:
+            raise ToolError("Need runs on both application and network faults to compare.")
+        p = stats.fisher_exact(
+            net["layer_right"],
+            net["runs"] - net["layer_right"],
+            app["layer_right"],
+            app["runs"] - app["layer_right"],
+        )
+        gap = round(net["layer_accuracy"] - app["layer_accuracy"], 4)
+        pooled = condition == "all"
+        if pooled:
+            reading = (
+                "Pooled conditions repeat each snapshot, so no significance reading is given; "
+                "run it per condition for a test."
+            )
+        elif p >= 0.05:
+            reading = (
+                "No statistically significant evidence of a layer-accuracy gap between "
+                "network and application faults; with small groups that is not proof they match."
+            )
+        else:
+            way = "less" if gap < 0 else "more"
+            reading = (
+                f"The model places network faults in the right layer {way} often "
+                "(unadjusted p < 0.05)."
+            )
+        caveat = (
+            "Network includes the hardware-arm cases, as in the paper's RQ2. Snapshots differ "
+            "between the groups, so this is an unpaired test, and p is not Holm-adjusted "
+            "across RQ1 and RQ2 as the paper does."
+        )
+        if pooled:
+            caveat += (
+                " With condition='all' the same snapshot counts once per condition, so the "
+                "p-value and the 95% intervals are too small."
+            )
+        return {
+            "model": model,
+            "condition": condition,
+            "perturbation": perturbation,
+            "groups": groups,
+            "gap_network_minus_application": gap,
+            "fisher_exact_p": p,
+            "reading": reading,
+            "caveat": caveat,
+            "note": "Mock data: made-up numbers." if self.settings.mock else None,
+        }
+
+    def hardest_snapshots(
+        self,
+        metric: str = "top1",
+        perturbation: str = "p0",
+        source: str = "all",
+        limit: int = 10,
+    ) -> dict[str, Any]:
+        """Snapshots ranked by how many model x condition runs got them right."""
+        if metric not in ("top1", "top3", "layer_ok"):
+            raise ToolError("metric must be top1, top3 or layer_ok")
+        df = self._filter(self._runs(source), perturbation=perturbation)
+        if not df.height:
+            raise ToolError(f"No scored runs under {perturbation} yet.")
+        per = (
+            df.group_by("incident_id", "fault", "fault_group")
+            .agg(
+                pl.len().alias("runs"),
+                pl.col(metric).fill_null(False).cast(pl.Int64).sum().alias("right"),
+            )
+            .with_columns((pl.col("right") / pl.col("runs")).round(4).alias("rate"))
+            .sort(["rate", "runs", "incident_id"], descending=[False, True, False])
+        )
+        rows = per.rename({"incident_id": "snapshot"}).to_dicts()
+        runs = per["runs"]
+        return {
+            "metric": metric,
+            "perturbation": perturbation,
+            "snapshots": per.height,
+            "never_right": int((per["right"] == 0).sum()),
+            "always_right": int((per["right"] == per["runs"]).sum()),
+            "hardest": rows[:limit],
+            "easiest": rows[::-1][:limit],
+            "caveat": (
+                None
+                if runs.min() == runs.max()
+                else "Snapshots have different run counts (some results are partial), so "
+                "compare rates, not counts."
+            ),
+            "note": "Mock data: made-up numbers." if self.settings.mock else None,
+        }
+
+    def snapshot_brief(
+        self, incident: str, perturbation: str = "p0", source: str = "all"
+    ) -> dict[str, Any]:
+        """One snapshot: its fault and group, and which model x condition runs got it right."""
+        df = self._filter(self._runs(source), perturbation=perturbation)
+        known = self._known_incidents(df)
+        if incident not in known:
+            raise ToolError(f"No scored runs for {incident!r}; snapshots seen: {known[:10]}")
+        sub = df.filter(pl.col("incident_id") == incident).sort("model_id", "condition")
+        runs = [
+            {
+                "model": r["model_id"],
+                "condition": r["condition"],
+                "top1": bool(r["top1"]),
+                "top3": bool(r["top3"]),
+                "layer_ok": bool(r["layer_ok"]),
+                "parsed": bool(r["parsed_ok"]),
+                "blamed": outputs.summarise(r["raw_output"], max_hypotheses=1),
+            }
+            for r in sub.to_dicts()
+        ]
+        right = [f"{r['model']} / {r['condition']}" for r in runs if r["top1"]]
+        return {
+            "snapshot": incident,
+            "fault": sub["fault"][0],
+            "fault_group": sub["fault_group"][0],
+            "perturbation": perturbation,
+            "runs": len(runs),
+            "top1_right": len(right),
+            "right_by": right,
+            "results": runs,
+            "note": "Mock data: made-up numbers." if self.settings.mock else None,
         }
 
     def show_cases(

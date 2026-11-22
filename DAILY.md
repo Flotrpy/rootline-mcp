@@ -4,9 +4,10 @@ Once a day, add one small, finished feature to rootline-mcp.
 
 ## Where the code lives
 
-`/mnt/project-files/connectors/rootline-mcp/` (until it moves to its own GitHub
-repository with Affan's yes; then work in that repository on a branch and open a pull
-request instead of editing the shared folder).
+The Flotrpy/rootline-mcp repository on GitHub. Each run works on a new branch named
+`daily/<Eastern date>` and opens a pull request into `main` for Affan to merge. Never push
+to `main` or merge. Commits carry Affan (flotrpy) as the only author, with no AI
+attribution lines.
 
 ## Each run
 
@@ -25,11 +26,11 @@ accounts without Affan's yes. Never ask for, copy or write an API key. Nothing p
 
 ## Backlog
 
-- [ ] `rootline_condition_effect(model)`: combined evidence vs the best single signal, paired, with McNemar (the paper's RQ1 check).
-- [ ] `rootline_layer_gap(model)`: layer accuracy on network vs application faults with Fisher's exact test (RQ2).
-- [ ] `link_rule="either_end"` option in score_summary: accept either service of a network link (the README's exploratory rescoring).
-- [ ] `rootline_hardest_snapshots`: rank snapshots by how many model × condition runs got them right.
-- [ ] `rootline_snapshot_brief(incident)`: one snapshot's fault and group, and which models and conditions got it right.
+- [x] (2026-11-18) `rootline_condition_effect(model)`: combined evidence vs the best single signal, paired, with McNemar (the paper's RQ1 check).
+- [x] (2026-11-19) `rootline_layer_gap(model)`: layer accuracy on network vs application faults with Fisher's exact test (RQ2).
+- [x] (2026-11-20) `link_rule="either_end"` option in score_summary: accept either service of a network link (the README's exploratory rescoring).
+- [x] (2026-11-21) `rootline_hardest_snapshots`: rank snapshots by how many model × condition runs got them right.
+- [x] (2026-11-22) `rootline_snapshot_brief(incident)`: one snapshot's fault and group, and which models and conditions got it right.
 - [ ] `rootline_calibration(model)`: confidence bins vs accuracy and expected calibration error.
 - [ ] `rootline_blame_map(model)`: for each fault, the services and categories the model blamed most often.
 - [ ] `rootline_cost_speed`: prompt and answer tokens, latency and free-quota use per model and condition.
