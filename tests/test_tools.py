@@ -253,3 +253,14 @@ def test_hardest_snapshots_ranks_by_share_right(tools):
     )
     with pytest.raises(ToolError, match="metric"):
         tools.hardest_snapshots(metric="parsed_ok")
+
+
+def test_snapshot_brief_lists_runs_for_one_snapshot(tools):
+    hard = tools.hardest_snapshots(limit=1)["hardest"][0]
+    r = tools.snapshot_brief(hard["snapshot"])
+    assert r["fault"] == hard["fault"] and r["fault_group"] == hard["fault_group"]
+    assert r["runs"] == hard["runs"] == len(r["results"])
+    assert r["top1_right"] == hard["right"] == len(r["right_by"])
+    assert all("blamed" in x for x in r["results"])
+    with pytest.raises(ToolError, match="No scored runs"):
+        tools.snapshot_brief("nope-r0")

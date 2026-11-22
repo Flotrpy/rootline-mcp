@@ -214,6 +214,20 @@ def build_server(settings: Settings, runs_allowed: bool, tools: Tools | None = N
         runs that got them right, with their fault and group, plus how many no run got right."""
         return _call(t.hardest_snapshots, metric, perturbation, source, limit)
 
+    @mcp.tool(name="rootline_snapshot_brief", annotations=READ)
+    def snapshot_brief(
+        incident: Annotated[
+            str, Field(description="Snapshot id, e.g. one from rootline_hardest_snapshots")
+        ],
+        perturbation: Annotated[str, Field(description="p0 or p1")] = "p0",
+        source: Annotated[
+            str, Field(description="all, published or work (private working results)")
+        ] = "all",
+    ) -> dict[str, Any]:
+        """Everything about one snapshot: its fault and group, and for each model and condition
+        whether it got the service right (top-1, top-3), the layer right, and what it blamed."""
+        return _call(t.snapshot_brief, incident, perturbation, source)
+
     @mcp.tool(name="rootline_show_cases", annotations=READ)
     def show_cases(
         model: Model,

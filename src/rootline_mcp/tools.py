@@ -519,7 +519,7 @@ class Tools:
             "only_a_examples": j.filter(pl.col("a") & ~pl.col("b"))["incident_id"].to_list()[:5],
             "only_b_examples": j.filter(~pl.col("a") & pl.col("b"))["incident_id"].to_list()[:5],
             "reading": (
-                "No reliable difference at this sample size."
+                "No statistically significant difference at this sample size."
                 if stats.mcnemar_exact(only_a, only_b) >= 0.05
                 else f"{model_a if diff > 0 else model_b} is reliably better here (p < 0.05)."
             ),
@@ -581,7 +581,7 @@ class Tools:
         diff = best["difference_combined_minus_single"]
         if best["mcnemar_exact_p"] >= 0.05:
             reading = (
-                f"No reliable difference between combined evidence and {best['condition']}, "
+                f"No statistically significant difference between combined evidence and {best['condition']}, "
                 "the best single signal, at this sample size."
             )
         elif diff > 0:
@@ -653,7 +653,10 @@ class Tools:
                 "run it per condition for a test."
             )
         elif p >= 0.05:
-            reading = "No layer-accuracy gap between network and application faults at p < 0.05."
+            reading = (
+                "No statistically significant evidence of a layer-accuracy gap between "
+                "network and application faults; with small groups that is not proof they match."
+            )
         else:
             way = "less" if gap < 0 else "more"
             reading = (
@@ -720,6 +723,40 @@ class Tools:
                 else "Snapshots have different run counts (some results are partial), so "
                 "compare rates, not counts."
             ),
+            "note": "Mock data: made-up numbers." if self.settings.mock else None,
+        }
+
+    def snapshot_brief(
+        self, incident: str, perturbation: str = "p0", source: str = "all"
+    ) -> dict[str, Any]:
+        """One snapshot: its fault and group, and which model x condition runs got it right."""
+        df = self._filter(self._runs(source), perturbation=perturbation)
+        known = self._known_incidents(df)
+        if incident not in known:
+            raise ToolError(f"No scored runs for {incident!r}; snapshots seen: {known[:10]}")
+        sub = df.filter(pl.col("incident_id") == incident).sort("model_id", "condition")
+        runs = [
+            {
+                "model": r["model_id"],
+                "condition": r["condition"],
+                "top1": bool(r["top1"]),
+                "top3": bool(r["top3"]),
+                "layer_ok": bool(r["layer_ok"]),
+                "parsed": bool(r["parsed_ok"]),
+                "blamed": outputs.summarise(r["raw_output"], max_hypotheses=1),
+            }
+            for r in sub.to_dicts()
+        ]
+        right = [f"{r['model']} / {r['condition']}" for r in runs if r["top1"]]
+        return {
+            "snapshot": incident,
+            "fault": sub["fault"][0],
+            "fault_group": sub["fault_group"][0],
+            "perturbation": perturbation,
+            "runs": len(runs),
+            "top1_right": len(right),
+            "right_by": right,
+            "results": runs,
             "note": "Mock data: made-up numbers." if self.settings.mock else None,
         }
 

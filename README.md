@@ -19,6 +19,7 @@ models actually answered. Free to run: no paid service, no card.
 | `rootline_condition_effect` | Combined evidence vs each single signal on the same snapshots, the best single signal, and McNemar's exact test for combined vs that one (the paper's RQ1). |
 | `rootline_layer_gap` | Layer accuracy for application, network and hardware faults with 95% intervals, and Fisher's exact test for network (hardware included) vs application (the paper's RQ2, unadjusted). |
 | `rootline_hardest_snapshots` | Snapshots ranked by the share of model × condition runs that got them right, with each one's fault and group. |
+| `rootline_snapshot_brief` | One snapshot's fault and group, and for each model and condition whether it got it right and what it blamed. |
 | `rootline_show_cases` | Real answers next to the true fault: wrong, right, unparsed, overconfident or false alarms on healthy snapshots. |
 
 ## How it works

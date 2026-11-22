@@ -4,6 +4,8 @@ One line per change, newest first. The daily feature routine adds to this.
 
 ## Unreleased
 
+- 2026-11-22: `rootline_snapshot_brief` shows one snapshot's fault, group and every run's result. Readings now say "no statistically significant difference" instead of implying there is none (from review).
+
 - 2026-11-21: `rootline_hardest_snapshots` ranks snapshots by how many runs got them right. Fixes from review: either-end scoring skips answers the harness couldn't parse; `rootline_layer_gap` counts hardware cases as network like the paper's RQ2, calls its p-value unadjusted, and gives no significance reading when conditions are pooled.
 
 - 2026-11-20: `link_rule="either_end"` on `rootline_score_summary`: exploratory rescoring
