@@ -69,6 +69,7 @@ def test_list_and_call_tools(app):
             "rootline_layer_gap",
             "rootline_hardest_snapshots",
             "rootline_snapshot_brief",
+            "rootline_calibration",
             "rootline_show_cases",
         }
         assert all(t.get("description") for t in tools)

@@ -760,6 +760,75 @@ class Tools:
             "note": "Mock data: made-up numbers." if self.settings.mock else None,
         }
 
+    def calibration(
+        self,
+        model: str,
+        condition: str = "combined",
+        perturbation: str = "p0",
+        source: str = "all",
+        bins: int = 5,
+    ) -> dict[str, Any]:
+        """Stated confidence vs top-1 accuracy in equal-width bins, with expected calibration error."""
+        if not 2 <= bins <= 10:
+            raise ToolError("bins must be between 2 and 10")
+        conditions = None if condition == "all" else [condition]
+        df = self._filter(self._runs(source), [model], conditions, perturbation)
+        df = df.filter(
+            (pl.col("fault_group") != "healthy")
+            & pl.col("parsed_ok").fill_null(False)
+            & pl.col("confidence").is_not_null()
+        )
+        if not df.height:
+            raise ToolError(f"{model} has no parsed answers with a confidence under {condition}.")
+        conf = [min(max(float(c), 0.0), 1.0) for c in df["confidence"].to_list()]
+        right = _bools(df["top1"])
+        n = len(conf)
+        rows, ece = [], 0.0
+        for b in range(bins):
+            lo, hi = b / bins, (b + 1) / bins
+            idx = [i for i, c in enumerate(conf) if lo <= c < hi or (b == bins - 1 and c == 1.0)]
+            if not idx:
+                rows.append({"bin": f"{lo:.1f}-{hi:.1f}", "answers": 0})
+                continue
+            acc = sum(right[i] for i in idx) / len(idx)
+            mc = sum(conf[i] for i in idx) / len(idx)
+            ece += len(idx) / n * abs(acc - mc)
+            rows.append(
+                {
+                    "bin": f"{lo:.1f}-{hi:.1f}",
+                    "answers": len(idx),
+                    "mean_confidence": round(mc, 4),
+                    "top1_accuracy": round(acc, 4),
+                    "gap": round(mc - acc, 4),
+                }
+            )
+        mean_conf = sum(conf) / n
+        acc = sum(right) / n
+        over = round(mean_conf - acc, 4)
+        return {
+            "model": model,
+            "condition": condition,
+            "perturbation": perturbation,
+            "answers": n,
+            "mean_confidence": round(mean_conf, 4),
+            "top1_accuracy": round(acc, 4),
+            "overconfidence": over,
+            "expected_calibration_error": round(ece, 4),
+            "bins": rows,
+            "reading": (
+                "Overconfident: it states more confidence than its accuracy."
+                if over > 0.05
+                else "Underconfident: it is right more often than it says."
+                if over < -0.05
+                else "Confidence roughly matches accuracy overall."
+            ),
+            "caveat": (
+                "Uses parsed answers on fault snapshots only (healthy ones left out), with the "
+                "top hypothesis's confidence; bins with few answers are noisy."
+            ),
+            "note": "Mock data: made-up numbers." if self.settings.mock else None,
+        }
+
     def show_cases(
         self,
         model: str,

@@ -228,6 +228,22 @@ def build_server(settings: Settings, runs_allowed: bool, tools: Tools | None = N
         whether it got the service right (top-1, top-3), the layer right, and what it blamed."""
         return _call(t.snapshot_brief, incident, perturbation, source)
 
+    @mcp.tool(name="rootline_calibration", annotations=READ)
+    def calibration(
+        model: Model,
+        condition: Annotated[
+            str, Field(description="metrics, traces, logs, combined, or all to pool them")
+        ] = "combined",
+        perturbation: Annotated[str, Field(description="p0 or p1")] = "p0",
+        source: Annotated[
+            str, Field(description="all, published or work (private working results)")
+        ] = "all",
+        bins: Annotated[int, Field(ge=2, le=10)] = 5,
+    ) -> dict[str, Any]:
+        """Is the model's stated confidence trustworthy? Bins answers by confidence and shows
+        top-1 accuracy per bin, overall overconfidence and expected calibration error."""
+        return _call(t.calibration, model, condition, perturbation, source, bins)
+
     @mcp.tool(name="rootline_show_cases", annotations=READ)
     def show_cases(
         model: Model,

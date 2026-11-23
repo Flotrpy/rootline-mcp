@@ -264,3 +264,15 @@ def test_snapshot_brief_lists_runs_for_one_snapshot(tools):
     assert all("blamed" in x for x in r["results"])
     with pytest.raises(ToolError, match="No scored runs"):
         tools.snapshot_brief("nope-r0")
+
+
+def test_calibration_bins_and_ece(tools):
+    r = tools.calibration("qwen3-8b-q4@ollama", condition="all")
+    filled = [b for b in r["bins"] if b["answers"]]
+    assert sum(b["answers"] for b in r["bins"]) == r["answers"] > 0
+    ece = sum(b["answers"] / r["answers"] * abs(b["gap"]) for b in filled)
+    assert abs(ece - r["expected_calibration_error"]) < 1e-3
+    assert 0 <= r["expected_calibration_error"] <= 1
+    assert abs(r["overconfidence"] - (r["mean_confidence"] - r["top1_accuracy"])) < 1e-3
+    with pytest.raises(ToolError, match="bins"):
+        tools.calibration("qwen3-8b-q4@ollama", bins=1)
