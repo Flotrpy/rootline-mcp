@@ -276,3 +276,19 @@ def test_calibration_bins_and_ece(tools):
     assert abs(r["overconfidence"] - (r["mean_confidence"] - r["top1_accuracy"])) < 1e-3
     with pytest.raises(ToolError, match="bins"):
         tools.calibration("qwen3-8b-q4@ollama", bins=1)
+
+
+def test_blame_map_counts_top_hypotheses(tools):
+    r = tools.blame_map("qwen3-8b-q4@ollama", condition="all")
+    assert r["faults"]
+    for f in r["faults"]:
+        shares = [b["share"] for b in f["most_blamed"]]
+        assert shares == sorted(shares, reverse=True) and sum(shares) <= 1.0001
+        assert len(f["most_blamed"]) <= 3
+    total = sum(f["runs"] for f in r["faults"])
+    assert total == tools._filter(tools._runs(), ["qwen3-8b-q4@ollama"]).height
+
+
+def test_calibration_bin_labels_are_precise(tools):
+    r = tools.calibration("qwen3-8b-q4@ollama", condition="all", bins=6)
+    assert r["bins"][0]["bin"] == "0-0.1667"

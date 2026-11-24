@@ -32,7 +32,7 @@ accounts without Affan's yes. Never ask for, copy or write an API key. Nothing p
 - [x] (2026-11-21) `rootline_hardest_snapshots`: rank snapshots by how many model × condition runs got them right.
 - [x] (2026-11-22) `rootline_snapshot_brief(incident)`: one snapshot's fault and group, and which models and conditions got it right.
 - [x] (2026-11-23) `rootline_calibration(model)`: confidence bins vs accuracy and expected calibration error.
-- [ ] `rootline_blame_map(model)`: for each fault, the services and categories the model blamed most often.
+- [x] (2026-11-24) `rootline_blame_map(model)`: for each fault, the services and categories the model blamed most often.
 - [ ] `rootline_cost_speed`: prompt and answer tokens, latency and free-quota use per model and condition.
 - [ ] `rootline_actions(model)`: remediation actions chosen, and how often the action fits the true layer.
 - [ ] `rootline_perturbation_effect(model)`: p0 vs p1 (anonymised names), paired (RQ3 groundwork).

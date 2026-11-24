@@ -70,6 +70,7 @@ def test_list_and_call_tools(app):
             "rootline_hardest_snapshots",
             "rootline_snapshot_brief",
             "rootline_calibration",
+            "rootline_blame_map",
             "rootline_show_cases",
         }
         assert all(t.get("description") for t in tools)

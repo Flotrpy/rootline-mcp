@@ -4,6 +4,8 @@ One line per change, newest first. The daily feature routine adds to this.
 
 ## Unreleased
 
+- 2026-11-24: `rootline_blame_map` shows what a model blamed most often for each fault. Calibration bin labels now show exact edges (from review).
+
 - 2026-11-23: `rootline_calibration` compares a model's stated confidence with its top-1 accuracy, with expected calibration error.
 
 - 2026-11-22: `rootline_snapshot_brief` shows one snapshot's fault, group and every run's result. Readings now say "no statistically significant difference" instead of implying there is none (from review).

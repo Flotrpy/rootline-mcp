@@ -21,6 +21,7 @@ models actually answered. Free to run: no paid service, no card.
 | `rootline_hardest_snapshots` | Snapshots ranked by the share of model × condition runs that got them right, with each one's fault and group. |
 | `rootline_snapshot_brief` | One snapshot's fault and group, and for each model and condition whether it got it right and what it blamed. |
 | `rootline_calibration` | Stated confidence vs top-1 accuracy in bins, with overconfidence and expected calibration error. |
+| `rootline_blame_map` | For each fault type, the service and category the model's top hypothesis blamed most often. |
 | `rootline_show_cases` | Real answers next to the true fault: wrong, right, unparsed, overconfident or false alarms on healthy snapshots. |
 
 ## How it works

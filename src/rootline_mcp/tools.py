@@ -788,14 +788,14 @@ class Tools:
             lo, hi = b / bins, (b + 1) / bins
             idx = [i for i, c in enumerate(conf) if lo <= c < hi or (b == bins - 1 and c == 1.0)]
             if not idx:
-                rows.append({"bin": f"{lo:.1f}-{hi:.1f}", "answers": 0})
+                rows.append({"bin": f"{lo:.4g}-{hi:.4g}", "answers": 0})
                 continue
             acc = sum(right[i] for i in idx) / len(idx)
             mc = sum(conf[i] for i in idx) / len(idx)
             ece += len(idx) / n * abs(acc - mc)
             rows.append(
                 {
-                    "bin": f"{lo:.1f}-{hi:.1f}",
+                    "bin": f"{lo:.4g}-{hi:.4g}",
                     "answers": len(idx),
                     "mean_confidence": round(mc, 4),
                     "top1_accuracy": round(acc, 4),
@@ -826,6 +826,58 @@ class Tools:
                 "Uses parsed answers on fault snapshots only (healthy ones left out), with the "
                 "top hypothesis's confidence; bins with few answers are noisy."
             ),
+            "note": "Mock data: made-up numbers." if self.settings.mock else None,
+        }
+
+    def blame_map(
+        self,
+        model: str,
+        condition: str = "combined",
+        perturbation: str = "p0",
+        source: str = "all",
+        top: int = 3,
+    ) -> dict[str, Any]:
+        """For each fault, what the model's top hypothesis blamed most often."""
+        conditions = None if condition == "all" else [condition]
+        df = self._filter(self._runs(source), [model], conditions, perturbation)
+        if not df.height:
+            raise ToolError(f"{model} has no scored runs under {condition} yet.")
+        blames: dict[str, Counter] = {}
+        groups: dict[str, str] = {}
+        for r in df.select("fault", "fault_group", "raw_output").to_dicts():
+            a = outputs.summarise(r["raw_output"], max_hypotheses=1)
+            if not a["readable"]:
+                label = "unreadable answer"
+            elif a.get("abstain") or not a["hypotheses"]:
+                label = "abstained"
+            else:
+                h = a["hypotheses"][0]
+                svc = outputs.norm_service(str(h.get("service") or "?"))
+                cat = outputs.norm_category(str(h.get("category") or "?"))
+                label = f"{svc} / {cat}"
+            blames.setdefault(r["fault"], Counter())[label] += 1
+            groups[r["fault"]] = r["fault_group"]
+        faults = []
+        for fault in sorted(blames, key=lambda f: (groups[f], f)):
+            c = blames[fault]
+            n = sum(c.values())
+            faults.append(
+                {
+                    "fault": fault,
+                    "fault_group": groups[fault],
+                    "runs": n,
+                    "most_blamed": [
+                        {"blamed": k, "times": v, "share": round(v / n, 4)}
+                        for k, v in c.most_common(top)
+                    ],
+                }
+            )
+        return {
+            "model": model,
+            "condition": condition,
+            "perturbation": perturbation,
+            "faults": faults,
+            "caveat": "Counts the top hypothesis only, as service / category after the harness's normalisation.",
             "note": "Mock data: made-up numbers." if self.settings.mock else None,
         }
 

@@ -244,6 +244,22 @@ def build_server(settings: Settings, runs_allowed: bool, tools: Tools | None = N
         top-1 accuracy per bin, overall overconfidence and expected calibration error."""
         return _call(t.calibration, model, condition, perturbation, source, bins)
 
+    @mcp.tool(name="rootline_blame_map", annotations=READ)
+    def blame_map(
+        model: Model,
+        condition: Annotated[
+            str, Field(description="metrics, traces, logs, combined, or all to pool them")
+        ] = "combined",
+        perturbation: Annotated[str, Field(description="p0 or p1")] = "p0",
+        source: Annotated[
+            str, Field(description="all, published or work (private working results)")
+        ] = "all",
+        top: Annotated[int, Field(ge=1, le=10)] = 3,
+    ) -> dict[str, Any]:
+        """What does the model blame for each fault? For every fault type, the service and
+        category its top hypothesis named most often (or abstained / unreadable), with shares."""
+        return _call(t.blame_map, model, condition, perturbation, source, top)
+
     @mcp.tool(name="rootline_show_cases", annotations=READ)
     def show_cases(
         model: Model,
