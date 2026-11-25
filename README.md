@@ -22,6 +22,7 @@ models actually answered. Free to run: no paid service, no card.
 | `rootline_snapshot_brief` | One snapshot's fault and group, and for each model and condition whether it got it right and what it blamed. |
 | `rootline_calibration` | Stated confidence vs top-1 accuracy in bins, with overconfidence and expected calibration error. |
 | `rootline_blame_map` | For each fault type, the service and category the model's top hypothesis blamed most often. |
+| `rootline_cost_speed` | Tokens and latency per model and condition, and how many runs a day each free tier's daily caps allow. |
 | `rootline_show_cases` | Real answers next to the true fault: wrong, right, unparsed, overconfident or false alarms on healthy snapshots. |
 
 ## How it works

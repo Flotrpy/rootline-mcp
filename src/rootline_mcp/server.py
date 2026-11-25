@@ -260,6 +260,20 @@ def build_server(settings: Settings, runs_allowed: bool, tools: Tools | None = N
         category its top hypothesis named most often (or abstained / unreadable), with shares."""
         return _call(t.blame_map, model, condition, perturbation, source, top)
 
+    @mcp.tool(name="rootline_cost_speed", annotations=READ)
+    def cost_speed(
+        models: Annotated[
+            list[str] | None, Field(description="Only these model ids; all if left out")
+        ] = None,
+        perturbation: Annotated[str, Field(description="p0 or p1")] = "p0",
+        source: Annotated[
+            str, Field(description="all, published or work (private working results)")
+        ] = "all",
+    ) -> dict[str, Any]:
+        """What does a run cost? Mean prompt and answer tokens and median and p90 latency per
+        model and condition, plus how many runs a day each free tier's daily caps allow."""
+        return _call(t.cost_speed, models, perturbation, source)
+
     @mcp.tool(name="rootline_show_cases", annotations=READ)
     def show_cases(
         model: Model,

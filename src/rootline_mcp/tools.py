@@ -17,6 +17,7 @@ from rootline_mcp import outputs, stats
 from rootline_mcp.catalog import (
     CONDITIONS,
     EDGES,
+    LIMITS,
     MODELS,
     estimate_days,
     fault_of,
@@ -878,6 +879,57 @@ class Tools:
             "perturbation": perturbation,
             "faults": faults,
             "caveat": "Counts the top hypothesis only, as service / category after the harness's normalisation.",
+            "note": "Mock data: made-up numbers." if self.settings.mock else None,
+        }
+
+    def cost_speed(
+        self, models: list[str] | None = None, perturbation: str = "p0", source: str = "all"
+    ) -> dict[str, Any]:
+        """Tokens and latency per model and condition, and how far a free tier's daily caps go."""
+        df = self._filter(self._runs(source), models, None, perturbation)
+        if not df.height:
+            raise ToolError(f"No scored runs under {perturbation} yet.")
+        rows = (
+            df.group_by("model_id", "condition")
+            .agg(
+                pl.len().alias("runs"),
+                pl.col("prompt_tokens").mean().round(0).alias("mean_prompt_tokens"),
+                pl.col("completion_tokens").mean().round(0).alias("mean_answer_tokens"),
+                pl.col("latency_ms").median().round(0).alias("median_latency_ms"),
+                pl.col("latency_ms").quantile(0.9, "nearest").alias("p90_latency_ms"),
+            )
+            .sort("model_id", "condition")
+            .rename({"model_id": "model"})
+            .to_dicts()
+        )
+        quota = []
+        for m, g in df.group_by("model_id"):
+            model = m[0]
+            provider = g["provider"][0] if "provider" in g.columns else None
+            lim = LIMITS.get(provider or "")
+            per_run = (g["prompt_tokens"].fill_null(0) + g["completion_tokens"].fill_null(0)).mean()
+            caps = {}
+            if lim and lim.tpd and per_run:
+                caps["by_daily_tokens"] = int(lim.tpd // per_run)
+            if lim and lim.rpd:
+                caps["by_daily_requests"] = lim.rpd
+            quota.append(
+                {
+                    "model": model,
+                    "provider": provider,
+                    "mean_tokens_per_run": round(per_run or 0),
+                    "runs_per_day_on_free_tier": min(caps.values()) if caps else None,
+                    "limited_by": min(caps, key=caps.get) if caps else "no daily cap",
+                }
+            )
+        return {
+            "perturbation": perturbation,
+            "by_model_and_condition": rows,
+            "free_tier": sorted(quota, key=lambda q: q["model"]),
+            "caveat": (
+                "Daily caps are the harness's free-tier settings, a little under the published "
+                "ones; per-minute caps also slow runs down but are not counted here."
+            ),
             "note": "Mock data: made-up numbers." if self.settings.mock else None,
         }
 

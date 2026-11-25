@@ -292,3 +292,15 @@ def test_blame_map_counts_top_hypotheses(tools):
 def test_calibration_bin_labels_are_precise(tools):
     r = tools.calibration("qwen3-8b-q4@ollama", condition="all", bins=6)
     assert r["bins"][0]["bin"] == "0-0.1667"
+
+
+def test_cost_speed_tokens_latency_and_quota(tools):
+    r = tools.cost_speed()
+    rows = r["by_model_and_condition"]
+    assert rows and all(x["median_latency_ms"] <= x["p90_latency_ms"] for x in rows)
+    q = {x["model"]: x for x in r["free_tier"]}
+    groq = q["gpt-oss-120b@groq"]
+    by_tokens = 195_000 / groq["mean_tokens_per_run"]
+    assert groq["limited_by"] == ("by_daily_tokens" if by_tokens < 950 else "by_daily_requests")
+    assert abs(groq["runs_per_day_on_free_tier"] - min(by_tokens, 950)) < 2
+    assert q["qwen3-8b-q4@ollama"]["limited_by"] == "no daily cap"
