@@ -274,6 +274,21 @@ def build_server(settings: Settings, runs_allowed: bool, tools: Tools | None = N
         model and condition, plus how many runs a day each free tier's daily caps allow."""
         return _call(t.cost_speed, models, perturbation, source)
 
+    @mcp.tool(name="rootline_actions", annotations=READ)
+    def actions(
+        model: Model,
+        condition: Annotated[
+            str, Field(description="metrics, traces, logs, combined, or all to pool them")
+        ] = "combined",
+        perturbation: Annotated[str, Field(description="p0 or p1")] = "p0",
+        source: Annotated[
+            str, Field(description="all, published or work (private working results)")
+        ] = "all",
+    ) -> dict[str, Any]:
+        """Would the model's fix help? Which remediation actions it picks and how often each
+        acts on the right layer for the true fault, overall and per fault group."""
+        return _call(t.actions, model, condition, perturbation, source)
+
     @mcp.tool(name="rootline_show_cases", annotations=READ)
     def show_cases(
         model: Model,

@@ -97,6 +97,22 @@ def _rescore_either_end(df: pl.DataFrame) -> pl.DataFrame:
     )
 
 
+# Which layer each remediation action acts on (RootLine harness schema), and the layer each
+# fault group lives in (hardware-arm faults show up as network trouble).
+ACTION_LAYER: dict[str, str] = {
+    "restart": "application",
+    "disable_feature": "application",
+    "clear_network_fault": "network",
+    "no_action": "none",
+}
+GROUP_LAYER: dict[str, str] = {
+    "application": "application",
+    "network": "network",
+    "hardware": "network",
+    "healthy": "none",
+}
+
+
 @dataclass
 class Tools:
     settings: Settings
@@ -929,6 +945,56 @@ class Tools:
             "caveat": (
                 "Daily caps are the harness's free-tier settings, a little under the published "
                 "ones; per-minute caps also slow runs down but are not counted here."
+            ),
+            "note": "Mock data: made-up numbers." if self.settings.mock else None,
+        }
+
+    def actions(
+        self,
+        model: str,
+        condition: str = "combined",
+        perturbation: str = "p0",
+        source: str = "all",
+    ) -> dict[str, Any]:
+        """Remediation actions chosen, and how often each fits the true fault's layer."""
+        conditions = None if condition == "all" else [condition]
+        df = self._filter(self._runs(source), [model], conditions, perturbation)
+        df = df.filter(pl.col("parsed_ok").fill_null(False) & pl.col("action_type").is_not_null())
+        if not df.height:
+            raise ToolError(f"{model} has no parsed answers with an action under {condition}.")
+        rows = df.select("action_type", "action_target", "fault_group").to_dicts()
+        fits = [
+            ACTION_LAYER.get(r["action_type"]) == GROUP_LAYER.get(r["fault_group"]) for r in rows
+        ]
+        by_action = Counter(r["action_type"] for r in rows)
+        by_group: dict[str, list[bool]] = {}
+        for r, ok in zip(rows, fits, strict=True):
+            by_group.setdefault(r["fault_group"], []).append(ok)
+        unknown = sorted({r["action_type"] for r in rows} - set(ACTION_LAYER))
+        return {
+            "model": model,
+            "condition": condition,
+            "perturbation": perturbation,
+            "answers": len(rows),
+            "actions_chosen": [
+                {
+                    "action": a,
+                    "acts_on": ACTION_LAYER.get(a, "unknown"),
+                    "times": n,
+                    "share": round(n / len(rows), 4),
+                }
+                for a, n in by_action.most_common()
+            ],
+            "fits_true_layer": stats.rate(fits),
+            "fits_true_layer_95ci": stats.bootstrap_ci(fits),
+            "fits_by_fault_group": {
+                g: {"answers": len(v), "fits": stats.rate(v)} for g, v in sorted(by_group.items())
+            },
+            "unknown_actions": unknown or None,
+            "caveat": (
+                "An action fits when it acts on the true fault's layer: restart and "
+                "disable_feature on application faults, clear_network_fault on network and "
+                "hardware faults, no_action on healthy snapshots. It does not check the target."
             ),
             "note": "Mock data: made-up numbers." if self.settings.mock else None,
         }

@@ -304,3 +304,20 @@ def test_cost_speed_tokens_latency_and_quota(tools):
     assert groq["limited_by"] == ("by_daily_tokens" if by_tokens < 950 else "by_daily_requests")
     assert abs(groq["runs_per_day_on_free_tier"] - min(by_tokens, 950)) < 2
     assert q["qwen3-8b-q4@ollama"]["limited_by"] == "no daily cap"
+
+
+def test_actions_fit_true_layer(tools):
+    r = tools.actions("qwen3-8b-q4@ollama", condition="all")
+    assert sum(a["times"] for a in r["actions_chosen"]) == r["answers"] > 0
+    # The mock always restarts, which acts on the application layer only.
+    assert r["actions_chosen"][0]["action"] == "restart"
+    g = r["fits_by_fault_group"]
+    assert g["application"]["fits"] == 1.0
+    assert g.get("network", {"fits": 0.0})["fits"] == 0.0
+    assert g.get("hardware", {"fits": 0.0})["fits"] == 0.0
+
+
+def test_action_layer_table_covers_harness_actions():
+    from rootline_mcp.tools import ACTION_LAYER
+
+    assert set(ACTION_LAYER) == {"restart", "disable_feature", "clear_network_fault", "no_action"}
