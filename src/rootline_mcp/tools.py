@@ -999,6 +999,66 @@ class Tools:
             "note": "Mock data: made-up numbers." if self.settings.mock else None,
         }
 
+    def perturbation_effect(
+        self,
+        model: str,
+        metric: str = "top1",
+        condition: str = "combined",
+        source: str = "all",
+    ) -> dict[str, Any]:
+        """p0 (real service names) vs p1 (anonymised names), paired on the same snapshots (RQ3)."""
+        if metric not in ("top1", "top3", "layer_ok", "parsed_ok"):
+            raise ToolError("metric must be top1, top3, layer_ok or parsed_ok")
+        conditions = None if condition == "all" else [condition]
+        df = self._filter(self._runs(source), [model], conditions, perturbation=None)
+        keys = ["incident_id", "condition"]
+
+        def side(p: str) -> pl.DataFrame:
+            return (
+                df.filter(pl.col("perturbation") == p)
+                .select(*keys, pl.col(metric).fill_null(False).alias(p))
+                .unique(subset=keys, keep="first")
+            )
+
+        p0, p1 = side("p0"), side("p1")
+        if not p1.height:
+            raise ToolError(f"{model} has no p1 (anonymised names) runs under {condition} yet.")
+        j = p0.join(p1, on=keys, how="inner")
+        if not j.height:
+            raise ToolError("No snapshot was run under both p0 and p1 for this model yet.")
+        only_p0 = int((j["p0"] & ~j["p1"]).sum())
+        only_p1 = int((~j["p0"] & j["p1"]).sum())
+        r0, r1 = stats.rate(_bools(j["p0"])), stats.rate(_bools(j["p1"]))
+        p = stats.mcnemar_exact(only_p0, only_p1)
+        drop = round((r0 or 0) - (r1 or 0), 4)
+        if p >= 0.05:
+            reading = (
+                "No statistically significant change when service names are anonymised "
+                "at this sample size."
+            )
+        elif drop > 0:
+            reading = "Scores drop when names are anonymised (p < 0.05): names carry the model."
+        else:
+            reading = "Scores rise when names are anonymised (p < 0.05)."
+        return {
+            "model": model,
+            "metric": metric,
+            "condition": condition,
+            "paired_runs": j.height,
+            "p0_rate": r0,
+            "p1_rate": r1,
+            "drop_p0_minus_p1": drop,
+            "only_p0_right": only_p0,
+            "only_p1_right": only_p1,
+            "mcnemar_exact_p": p,
+            "reading": reading,
+            "caveat": (
+                "Paired on snapshot and condition runs present under both p0 and p1. Groundwork "
+                "for RQ3; not Holm-adjusted with RQ1 and RQ2."
+            ),
+            "note": "Mock data: made-up numbers." if self.settings.mock else None,
+        }
+
     def show_cases(
         self,
         model: str,

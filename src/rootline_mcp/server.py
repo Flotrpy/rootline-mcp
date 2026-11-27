@@ -289,6 +289,21 @@ def build_server(settings: Settings, runs_allowed: bool, tools: Tools | None = N
         acts on the right layer for the true fault, overall and per fault group."""
         return _call(t.actions, model, condition, perturbation, source)
 
+    @mcp.tool(name="rootline_perturbation_effect", annotations=READ)
+    def perturbation_effect(
+        model: Model,
+        metric: Annotated[str, Field(description="top1, top3, layer_ok or parsed_ok")] = "top1",
+        condition: Annotated[
+            str, Field(description="metrics, traces, logs, combined, or all to pool them")
+        ] = "combined",
+        source: Annotated[
+            str, Field(description="all, published or work (private working results)")
+        ] = "all",
+    ) -> dict[str, Any]:
+        """Does the model lean on service names? Compares p0 (real names) with p1 (anonymised
+        names) on the same snapshots with McNemar's exact test (groundwork for RQ3)."""
+        return _call(t.perturbation_effect, model, metric, condition, source)
+
     @mcp.tool(name="rootline_show_cases", annotations=READ)
     def show_cases(
         model: Model,

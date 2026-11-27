@@ -321,3 +321,21 @@ def test_action_layer_table_covers_harness_actions():
     from rootline_mcp.tools import ACTION_LAYER
 
     assert set(ACTION_LAYER) == {"restart", "disable_feature", "clear_network_fault", "no_action"}
+
+
+def test_perturbation_effect_pairs_p0_with_p1(tools, monkeypatch):
+    with pytest.raises(ToolError, match="no p1"):
+        tools.perturbation_effect("qwen3-8b-q4@ollama")
+    real = tools._runs
+    base = real()
+    # Fake p1: same runs with names hidden, and every top-1 hit lost.
+    p1 = base.filter(pl.col("model_id") == "qwen3-8b-q4@ollama").with_columns(
+        pl.lit("p1").alias("perturbation"),
+        pl.lit(False).alias("top1"),
+        (pl.col("run_id") + "-p1").alias("run_id"),
+    )
+    monkeypatch.setattr(tools, "_runs", lambda source="all": pl.concat([base, p1]))
+    r = tools.perturbation_effect("qwen3-8b-q4@ollama")
+    assert r["paired_runs"] == 42 and r["p1_rate"] == 0.0
+    assert r["only_p1_right"] == 0 and r["only_p0_right"] == round(r["p0_rate"] * 42)
+    assert r["drop_p0_minus_p1"] == r["p0_rate"]

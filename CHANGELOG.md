@@ -4,6 +4,8 @@ One line per change, newest first. The daily feature routine adds to this.
 
 ## Unreleased
 
+- 2026-11-27: `rootline_perturbation_effect` compares real and anonymised service names on the same snapshots (RQ3 groundwork).
+
 - 2026-11-26: `rootline_actions` shows which remediation actions a model picks and how often they act on the true fault's layer.
 
 - 2026-11-25: `rootline_cost_speed` shows tokens and latency per model and condition, and how many runs a day each free tier allows.

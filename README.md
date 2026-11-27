@@ -24,6 +24,7 @@ models actually answered. Free to run: no paid service, no card.
 | `rootline_blame_map` | For each fault type, the service and category the model's top hypothesis blamed most often. |
 | `rootline_cost_speed` | Tokens and latency per model and condition, and how many runs a day each free tier's daily caps allow. |
 | `rootline_actions` | Remediation actions a model picks, and how often each acts on the true fault's layer. |
+| `rootline_perturbation_effect` | p0 (real service names) vs p1 (anonymised names) on the same snapshots, with McNemar's exact test (RQ3 groundwork). |
 | `rootline_show_cases` | Real answers next to the true fault: wrong, right, unparsed, overconfident or false alarms on healthy snapshots. |
 
 ## How it works

@@ -73,6 +73,7 @@ def test_list_and_call_tools(app):
             "rootline_blame_map",
             "rootline_cost_speed",
             "rootline_actions",
+            "rootline_perturbation_effect",
             "rootline_show_cases",
         }
         assert all(t.get("description") for t in tools)
